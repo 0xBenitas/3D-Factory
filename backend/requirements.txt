@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+httpx
+anthropic
+trimesh
+pymeshfix
+pyrender
+Pillow
+numpy
+python-multipart
+apscheduler

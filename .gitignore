@@ -1,0 +1,33 @@
+# Data (gitignored, mais on garde la structure via .gitkeep)
+backend/data/*
+!backend/data/.gitkeep
+!backend/data/*/
+backend/data/*/*
+!backend/data/*/.gitkeep
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# Node / Frontend build
+node_modules/
+frontend/dist/
+
+# SQLite
+*.sqlite
+*.sqlite-journal
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
