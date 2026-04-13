@@ -14,6 +14,7 @@ ajoutés en Phase 2+.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -29,15 +30,21 @@ class SPAStaticFiles(StaticFiles):
 
     Sans ça, recharger `/models` ou `/settings` dans le navigateur renvoie
     un 404 parce que ces routes n'existent que côté React Router.
+
+    Le fallback se déclenche **uniquement** si le path ressemble à une route
+    SPA (pas d'extension de fichier). Un asset manquant comme
+    `/assets/foo.js` continue de renvoyer 404 — sinon le navigateur
+    tenterait d'exécuter du HTML comme du JS, ce qui masque les bugs.
     """
 
     async def get_response(self, path, scope):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404:
+            if exc.status_code == 404 and "." not in path.rsplit("/", 1)[-1]:
                 return await super().get_response("index.html", scope)
             raise
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,17 +53,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-app = FastAPI(title="3D Print Factory", version="4.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Cycle de vie de l'app : initialise la BDD au démarrage."""
+    init_db()
+    logger.info("3D Factory backend ready (data dir: %s)", config.DATA_DIR)
+    yield
+
+
+app = FastAPI(title="3D Print Factory", version="4.0.0", lifespan=lifespan)
 
 # Middleware d'authentification — s'applique à toutes les routes sauf celles
 # déclarées publiques dans auth.py.
 app.middleware("http")(basic_auth_middleware)
-
-
-@app.on_event("startup")
-def _on_startup() -> None:
-    init_db()
-    logger.info("3D Factory backend ready (data dir: %s)", config.DATA_DIR)
 
 
 @app.get("/api/health", tags=["health"])

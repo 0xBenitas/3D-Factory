@@ -8,7 +8,7 @@ screenshot_paths, photo_paths, tags, print_params) utilisent le type
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
@@ -22,6 +22,11 @@ from sqlalchemy import (
 )
 
 from database import Base
+
+
+def _utcnow() -> datetime:
+    """Timestamp UTC timezone-aware (remplace `datetime.utcnow` déprécié)."""
+    return datetime.now(timezone.utc)
 
 
 class Model(Base):
@@ -73,7 +78,7 @@ class Model(Base):
     pipeline_status = Column(String, nullable=False, default="prompt")
     pipeline_error = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
 
 class Export(Base):
@@ -96,7 +101,7 @@ class Export(Base):
 
     zip_path = Column(String, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
 
 class Setting(Base):
