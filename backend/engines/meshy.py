@@ -27,6 +27,7 @@ from engines import register
 from engines.base import (
     Engine3D,
     EngineTaskFailed,
+    EngineTransient,
     GenerationResult,
     InsufficientCredits,
     InvalidApiKey,
@@ -59,7 +60,14 @@ def _headers() -> dict[str, str]:
 
 
 def _raise_for_status(resp: httpx.Response, context: str) -> None:
-    """Traduit un httpx.Response en exception typée Engine*."""
+    """Traduit un httpx.Response en exception typée Engine*.
+
+    - 401 → InvalidApiKey (permanent)
+    - 402 → InsufficientCredits (permanent)
+    - 429 → RateLimited (retryable)
+    - 5xx → EngineTransient (retryable — erreur serveur passagère)
+    - autres 4xx → EngineTaskFailed (permanent — bad request, malformé, etc.)
+    """
     if resp.status_code == 401:
         raise InvalidApiKey(f"Meshy 401 ({context}): invalid API key")
     if resp.status_code == 402:
@@ -67,7 +75,7 @@ def _raise_for_status(resp: httpx.Response, context: str) -> None:
     if resp.status_code == 429:
         raise RateLimited(f"Meshy 429 ({context}): rate limited")
     if resp.status_code >= 500:
-        raise EngineTaskFailed(f"Meshy {resp.status_code} ({context}): server error")
+        raise EngineTransient(f"Meshy {resp.status_code} ({context}): server error")
     if resp.status_code >= 400:
         raise EngineTaskFailed(
             f"Meshy {resp.status_code} ({context}): {resp.text[:500]}"
@@ -150,10 +158,9 @@ class MeshyEngine(Engine3D):
             }
             endpoint = "image-to-3d"
         else:
-            # Meshy prompt limit : 600 chars (SPECS §1.1).
-            if len(prompt) > 600:
-                logger.warning("Prompt trop long (%d chars), tronqué à 600", len(prompt))
-                prompt = prompt[:600]
+            # Garde défensive : prompt_optimizer tronque déjà à 600, mais
+            # un appel direct pourrait outrepasser la limite Meshy.
+            prompt = prompt[:600] if len(prompt) > 600 else prompt
             payload = {
                 "mode": "preview",
                 "prompt": prompt,

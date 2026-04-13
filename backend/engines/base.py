@@ -32,12 +32,30 @@ class RateLimited(EngineError):
     """429 : retry après backoff (géré par `tasks.retry_async`)."""
 
 
+class EngineTransient(EngineError):
+    """Erreur transient (5xx serveur, timeout réseau) — retry possible."""
+
+
 class EngineTaskFailed(EngineError):
-    """La tâche a été acceptée puis a échoué côté serveur du moteur."""
+    """La tâche a été acceptée puis a échoué côté serveur du moteur.
+
+    En général pas retryable : la même entrée refera échouer Meshy/Tripo.
+    Retry = repayer les crédits pour rien.
+    """
 
 
 class NotSupported(EngineError):
     """L'action demandée (ex. image-to-3d, remesh) n'est pas supportée."""
+
+
+# Exceptions retryables vs permanentes — utilisé par `tasks.retry_async`.
+RETRYABLE: tuple[type[EngineError], ...] = (RateLimited, EngineTransient)
+NON_RETRYABLE: tuple[type[EngineError], ...] = (
+    InvalidApiKey,
+    InsufficientCredits,
+    EngineTaskFailed,
+    NotSupported,
+)
 
 
 # --------------------------------------------------------------------------- #

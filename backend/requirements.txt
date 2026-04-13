@@ -8,5 +8,7 @@ pymeshfix
 pyrender
 Pillow
 numpy
+networkx
+rtree
 python-multipart
 apscheduler

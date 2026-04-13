@@ -16,6 +16,11 @@ apt update && apt install caddy
 # Deps pyrender (rendu screenshots sans GPU)
 apt install -y libosmesa6-dev freeglut3-dev
 
+# Deps rtree (accélère les ray queries de trimesh pour
+# _estimate_min_wall_thickness — sans ça, la métrique est à 0 et le
+# scoring qualité donne un faux négatif sur l'épaisseur).
+apt install -y libspatialindex-dev
+
 # Variable d'environnement obligatoire pour pyrender headless
 echo 'export PYOPENGL_PLATFORM=osmesa' >> /root/.bashrc
 

@@ -20,10 +20,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Modèle Claude utilisé pour tous les appels (SPECS §1).
-# Peut être overridé via env CLAUDE_MODEL au moment du déploiement.
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
-
 MAX_PROMPT_CHARS = 600   # Limite Meshy (SPECS §1.1).
 MAX_TOKENS_REPLY = 400
 
@@ -51,13 +47,42 @@ Règles :
 
 
 class PromptOptimizerError(Exception):
-    """Le service n'a pas pu produire un prompt (API down, safety filter, etc.)."""
+    """Erreur générique — retry possible (5xx, timeout)."""
+
+
+class PromptOptimizerAuthError(PromptOptimizerError):
+    """401 : clé Claude invalide. Retry inutile."""
+
+
+class PromptOptimizerRefused(PromptOptimizerError):
+    """Claude a refusé le contenu (safety filter, 400). Retry inutile."""
+
+
+# Exceptions permanentes — à exclure du retry dans tasks.py.
+NON_RETRYABLE: tuple[type[PromptOptimizerError], ...] = (
+    PromptOptimizerAuthError,
+    PromptOptimizerRefused,
+)
 
 
 def _client() -> anthropic.AsyncAnthropic:
     if not config.ANTHROPIC_API_KEY:
-        raise PromptOptimizerError("ANTHROPIC_API_KEY not configured in .env")
+        raise PromptOptimizerAuthError("ANTHROPIC_API_KEY not configured in .env")
     return anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+
+
+def _wrap_api_error(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
+    """Traduit une erreur du SDK Anthropic en exception typée du service.
+
+    - AuthenticationError (401) → non-retryable (clé invalide)
+    - BadRequestError (400)     → non-retryable (safety filter)
+    - tout le reste (429, 5xx, réseau) → retryable
+    """
+    if isinstance(exc, anthropic.AuthenticationError):
+        return PromptOptimizerAuthError(f"Claude auth failed ({context}): {exc}")
+    if isinstance(exc, anthropic.BadRequestError):
+        return PromptOptimizerRefused(f"Claude rejected request ({context}): {exc}")
+    return PromptOptimizerError(f"Claude API error ({context}): {exc}")
 
 
 def _extract_text(message: anthropic.types.Message) -> str:
@@ -90,13 +115,13 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
     client = _client()
     try:
         message = await client.messages.create(
-            model=CLAUDE_MODEL,
+            model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
             system=_SYSTEM_TEXT,
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
-        raise PromptOptimizerError(f"Claude API error: {exc}") from exc
+        raise _wrap_api_error(exc, "optimize_from_text") from exc
 
     result = _extract_text(message)
     if not result:
@@ -113,7 +138,8 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
     """Optimise un prompt à partir d'une photo uploadée (Claude Vision)."""
     p = Path(image_path)
     if not p.is_file():
-        raise PromptOptimizerError(f"Image not found: {image_path}")
+        # Non-retryable : le fichier n'apparaîtra pas par magie.
+        raise PromptOptimizerRefused(f"Image not found: {image_path}")
 
     media_type, _ = mimetypes.guess_type(p.name)
     if not media_type or not media_type.startswith("image/"):
@@ -124,7 +150,7 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
     client = _client()
     try:
         message = await client.messages.create(
-            model=CLAUDE_MODEL,
+            model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
             system=_SYSTEM_IMAGE,
             messages=[
@@ -148,7 +174,7 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
             ],
         )
     except anthropic.APIError as exc:
-        raise PromptOptimizerError(f"Claude API error: {exc}") from exc
+        raise _wrap_api_error(exc, "optimize_from_image") from exc
 
     result = _extract_text(message)
     if not result:

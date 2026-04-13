@@ -11,8 +11,6 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
-import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -38,16 +36,20 @@ ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png"}
 # --------------------------------------------------------------------------- #
 
 class PipelineRunRequest(BaseModel):
+    # 5000 chars largement suffisant (prompt utilisateur) et empêche
+    # l'abus (spam 10 MB de texte à traiter par Claude).
     input_text: str | None = Field(
-        default=None, description="Description texte libre (ignoré si image fournie)"
+        default=None,
+        max_length=5000,
+        description="Description texte libre (ignoré si image fournie)",
     )
     input_image: str | None = Field(
         default=None,
         description="Image encodée en data URI (data:image/jpeg;base64,...) "
                     "ou base64 brut.",
     )
-    engine: str | None = Field(default=None, description="Nom du moteur 3D")
-    image_engine: str | None = Field(default=None, description="Nom du moteur image")
+    engine: str | None = Field(default=None, max_length=50, description="Nom du moteur 3D")
+    image_engine: str | None = Field(default=None, max_length=50, description="Nom du moteur image")
 
 
 class PipelineRunResponse(BaseModel):

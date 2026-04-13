@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 import anthropic
@@ -23,7 +24,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS_REPLY = 1500
 
 # SPECS §1.3 — verbatim.
@@ -57,24 +57,17 @@ Réponds UNIQUEMENT en JSON, pas de texte autour :
 }"""
 
 
+@dataclass
 class QualityScoreResult:
-    """Wrapper léger pour retourner score + criteria + summary.
+    """Retour de `score_mesh` — cohérent avec `GenerationResult` des engines.
 
     `score = None` et `criteria = {}` si le scoring échoue — le pipeline
     continue, le modèle arrive en "pending" avec les métriques brutes.
     """
 
-    __slots__ = ("score", "criteria", "summary")
-
-    def __init__(
-        self,
-        score: float | None,
-        criteria: dict[str, Any],
-        summary: str | None,
-    ) -> None:
-        self.score = score
-        self.criteria = criteria
-        self.summary = summary
+    score: float | None = None
+    criteria: dict[str, Any] = field(default_factory=dict)
+    summary: str | None = None
 
 
 def _extract_text(message: anthropic.types.Message) -> str:
@@ -115,7 +108,7 @@ async def score_mesh(
     """
     if not config.ANTHROPIC_API_KEY:
         logger.warning("QualityScorer: ANTHROPIC_API_KEY missing, skipping")
-        return QualityScoreResult(None, {}, None)
+        return QualityScoreResult()
 
     user_msg = (
         f"Type d'objet demandé : {object_description}\n"
@@ -125,26 +118,26 @@ async def score_mesh(
 
     try:
         message = await client.messages.create(
-            model=CLAUDE_MODEL,
+            model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
             system=_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
         logger.warning("QualityScorer: Claude API error, skipping: %s", exc)
-        return QualityScoreResult(None, {}, None)
+        return QualityScoreResult()
 
     raw = _extract_text(message)
     data = _parse_json(raw)
     if not data:
         logger.warning("QualityScorer: unparseable response, skipping")
-        return QualityScoreResult(None, {}, None)
+        return QualityScoreResult()
 
     try:
         score = float(data.get("score"))
     except (TypeError, ValueError):
         logger.warning("QualityScorer: missing/invalid 'score' field")
-        return QualityScoreResult(None, {}, None)
+        return QualityScoreResult()
 
     return QualityScoreResult(
         score=score,

@@ -86,6 +86,11 @@ DEFAULT_IMAGE_ENGINE: str = _get("DEFAULT_IMAGE_ENGINE", "stability")
 DEFAULT_TEMPLATE: str = _get("DEFAULT_TEMPLATE", "cults3d")
 MAX_DAILY_BUDGET_EUR: float = float(_get("MAX_DAILY_BUDGET_EUR", "2.00"))
 
+# Claude API — overridable pour ajuster qualité/coût sans redéployer.
+# La ligne Sonnet 4.5 est le successeur direct de celle citée par les specs
+# ("Sonnet pour rapport qualité/coût optimal") et reste moins chère qu'Opus.
+CLAUDE_MODEL: str = _get("CLAUDE_MODEL", "claude-sonnet-4-5")
+
 # Serveur
 HOST: str = _get("HOST", "0.0.0.0")
 PORT: int = int(_get("PORT", "8000"))

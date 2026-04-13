@@ -23,8 +23,11 @@ from database import SessionLocal
 from engines import get_engine
 from engines.base import (
     EngineError,
+    EngineTransient,
     InsufficientCredits,
     InvalidApiKey,
+    NON_RETRYABLE as ENGINE_NON_RETRYABLE,
+    RETRYABLE as ENGINE_RETRYABLE,
     RateLimited,
 )
 from models import Model
@@ -47,17 +50,22 @@ async def retry_async(
     *args: Any,
     max_retries: int = 2,
     backoff_base: float = 5.0,
-    retry_on: tuple[type[BaseException], ...] = (RateLimited, EngineError),
-    non_retryable: tuple[type[BaseException], ...] = (InvalidApiKey, InsufficientCredits),
+    retry_on: tuple[type[BaseException], ...] = ENGINE_RETRYABLE,
+    non_retryable: tuple[type[BaseException], ...] = ENGINE_NON_RETRYABLE,
     **kwargs: Any,
 ) -> T:
     """Appelle `func(*args, **kwargs)` avec retry + backoff exponentiel.
 
-    Par défaut :
+    Par défaut (pour engines) :
     - max_retries = 2 (donc 3 tentatives)
     - backoff : 5s → 10s → 20s
-    - Retry sur RateLimited et EngineError génériques
-    - Pas de retry sur InvalidApiKey / InsufficientCredits (inutile)
+    - Retry sur ENGINE_RETRYABLE = (RateLimited, EngineTransient)
+    - Pas de retry sur ENGINE_NON_RETRYABLE = (InvalidApiKey,
+      InsufficientCredits, EngineTaskFailed, NotSupported)
+
+    L'ordre des except matters : les non_retryable sont checkés AVANT
+    retry_on pour qu'une exception listée dans les deux (cas de
+    sous-classes) soit traitée comme permanente.
     """
     last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
@@ -156,14 +164,14 @@ async def _run_pipeline_inner(model_id: int) -> None:
                 prompt_optimizer.optimize_from_image,
                 input_image_path, engine_name,
                 retry_on=(prompt_optimizer.PromptOptimizerError,),
-                non_retryable=(),
+                non_retryable=prompt_optimizer.NON_RETRYABLE,
             )
         else:
             optimized = await retry_async(
                 prompt_optimizer.optimize_from_text,
                 input_text or "", engine_name,
                 retry_on=(prompt_optimizer.PromptOptimizerError,),
-                non_retryable=(),
+                non_retryable=prompt_optimizer.NON_RETRYABLE,
             )
     except Exception as exc:
         _fail(model_id, f"Prompt optimization failed: {exc}")
@@ -232,7 +240,7 @@ async def _run_pipeline_inner(model_id: int) -> None:
     except Exception as exc:
         # Double sécurité — quality_scorer est censé ne jamais lever.
         logger.warning("Pipeline #%d: scoring crashed: %s", model_id, exc)
-        score_result = quality_scorer.QualityScoreResult(None, {}, None)
+        score_result = quality_scorer.QualityScoreResult()
 
     _update_model(
         model_id,
