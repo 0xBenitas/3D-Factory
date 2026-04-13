@@ -45,7 +45,7 @@ class Model(Base):
     optimized_prompt = Column(Text, nullable=True)
 
     # Moteur 3D utilisé
-    engine = Column(String, nullable=False)              # "meshy" | "tripo" | ...
+    engine = Column(String, nullable=False, index=True)  # "meshy" | "tripo" | ...
     engine_task_id = Column(String, nullable=True)
 
     # Fichiers générés
@@ -56,12 +56,12 @@ class Model(Base):
     mesh_metrics = Column(JSON, nullable=True)
     repair_log = Column(Text, nullable=True)
 
-    # Scoring qualité (informatif)
-    qc_score = Column(Float, nullable=True)
+    # Scoring qualité (informatif) — indexé : tri par score dans le dashboard
+    qc_score = Column(Float, nullable=True, index=True)
     qc_details = Column(JSON, nullable=True)
 
-    # Validation humaine
-    validation = Column(String, nullable=False, default="pending")  # pending|approved|rejected
+    # Validation humaine — indexée : filtre principal du dashboard
+    validation = Column(String, nullable=False, default="pending", index=True)
     rejection_reason = Column(Text, nullable=True)
 
     # Studio (photos)
@@ -73,12 +73,13 @@ class Model(Base):
     cost_credits = Column(Integer, nullable=False, default=0)
     cost_eur_estimate = Column(Float, nullable=False, default=0.0)
 
-    # Pipeline
+    # Pipeline — indexé : filtre "en cours" + poll rapide
     # prompt | generating | repairing | scoring | pending | photos | packing | done | failed
-    pipeline_status = Column(String, nullable=False, default="prompt")
+    pipeline_status = Column(String, nullable=False, default="prompt", index=True)
     pipeline_error = Column(Text, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    # Indexé : tri par date dans le dashboard (le plus récent d'abord)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
 
 
 class Export(Base):
@@ -87,7 +88,14 @@ class Export(Base):
     __tablename__ = "exports"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
+    # ondelete="CASCADE" : si un Model est supprimé, ses exports le sont aussi.
+    # Fonctionne uniquement si `PRAGMA foreign_keys=ON` (cf. database.py).
+    model_id = Column(
+        Integer,
+        ForeignKey("models.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
     template = Column(String, nullable=False)            # "cults3d" | "printables" | ...
 

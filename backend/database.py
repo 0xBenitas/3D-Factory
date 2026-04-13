@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from config import (
@@ -35,6 +36,32 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     future=True,
 )
+
+
+@event.listens_for(Engine, "connect")
+def _configure_sqlite(dbapi_conn, connection_record) -> None:
+    """À chaque nouvelle connexion SQLite :
+
+    - WAL mode : les lecteurs ne bloquent plus les écrivains (critique
+      pour Phase 2 où les BackgroundTasks écrivent pendant que le
+      dashboard lit).
+    - foreign_keys=ON : SQLite les ignore par défaut — sans ça, nos FK
+      (ex. `Export.model_id → models.id` avec ondelete=CASCADE) sont
+      purement décoratives.
+    - synchronous=NORMAL : bon compromis durabilité/perf avec WAL.
+    """
+    # Ne s'applique qu'aux connexions SQLite (pour protéger contre
+    # d'autres engines qui pourraient partager cet écouteur).
+    if not hasattr(dbapi_conn, "executescript"):
+        return
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cur.close()
+
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 

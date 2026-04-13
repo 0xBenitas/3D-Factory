@@ -23,6 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import config
 from auth import basic_auth_middleware
 from database import init_db
+from routers import pipeline as pipeline_router
 
 
 class SPAStaticFiles(StaticFiles):
@@ -72,6 +73,10 @@ app.middleware("http")(basic_auth_middleware)
 def health() -> dict[str, str]:
     """Healthcheck public (pas d'auth) pour monitoring / uptime."""
     return {"status": "ok"}
+
+
+# Routers métier
+app.include_router(pipeline_router.router)
 
 
 # --------------------------------------------------------------------------- #
