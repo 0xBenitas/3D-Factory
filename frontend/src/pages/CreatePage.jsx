@@ -1,10 +1,46 @@
-// Phase 1 — placeholder. Composants réels (InputForm, EngineSelector,
-// PipelineTracker, CostTracker) à implémenter en Phase 2/3.
+import { useState } from 'react'
+import InputForm from '../components/InputForm.jsx'
+import PipelineTracker from '../components/PipelineTracker.jsx'
+import { startPipeline } from '../api.js'
+
+// SPECS §"Frontend — 3 pages / CreatePage".
+// Deux états : (1) formulaire vide, (2) tracker polling du model_id.
 export default function CreatePage() {
+  const [currentId, setCurrentId] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const handleSubmit = async (payload) => {
+    setBusy(true)
+    try {
+      const res = await startPipeline(payload)
+      setCurrentId(res.model_id)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <section>
-      <h2>Create</h2>
-      <p>Génère un nouveau modèle 3D à partir d'un texte ou d'une photo.</p>
+    <section className="page create-page">
+      <div className="page__header">
+        <h2>Create</h2>
+        <p className="muted">Texte ou photo → .stl imprimable + score.</p>
+      </div>
+
+      {currentId === null ? (
+        <InputForm onSubmit={handleSubmit} busy={busy} />
+      ) : (
+        <>
+          <PipelineTracker modelId={currentId} />
+          <div className="page__footer">
+            <button
+              className="btn"
+              onClick={() => setCurrentId(null)}
+            >
+              ← Générer un autre modèle
+            </button>
+          </div>
+        </>
+      )}
     </section>
   )
 }
