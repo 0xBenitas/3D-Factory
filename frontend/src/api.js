@@ -57,6 +57,8 @@ export const getModel = (id) => request(`/api/models/${id}`)
 
 export const getGlbUrl = (id) => `/api/models/${id}/glb`
 
+export const getInputImageUrl = (id) => `/api/models/${id}/input-image`
+
 export const validateModel = (id, action, reason = null) =>
   request(`/api/models/${id}/validate`, {
     method: 'PUT',

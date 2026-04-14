@@ -127,8 +127,9 @@ async def run(
     """Crée un Model en BDD et schedule le pipeline en BackgroundTask.
 
     Règles d'input (SPECS §4.1) :
-    - Si `input_image` fourni → input_type = "image", texte ignoré.
-    - Sinon `input_text` requis → input_type = "text".
+    - Si `input_text` non vide → input_type = "text", l'image est ignorée.
+    - Sinon si `input_image` fourni → input_type = "image".
+    - Sinon 400.
     - Le bouton frontend est disabled sans aucun input, mais on protège
       quand même côté serveur.
     """
@@ -141,10 +142,12 @@ async def run(
 
     image_engine = payload.image_engine or config.DEFAULT_IMAGE_ENGINE
 
-    # Déterminer le type d'input
+    # Déterminer le type d'input — texte prioritaire sur image (SPECS §4.1).
     image_data: bytes | None = None
     image_mime = "image/jpeg"
-    if payload.input_image:
+    if payload.input_text and payload.input_text.strip():
+        input_type = "text"
+    elif payload.input_image:
         if not engine_obj.supports_image_input:
             raise HTTPException(
                 400,
@@ -152,8 +155,6 @@ async def run(
             )
         image_data, image_mime = _decode_image(payload.input_image)
         input_type = "image"
-    elif payload.input_text and payload.input_text.strip():
-        input_type = "text"
     else:
         raise HTTPException(400, "Either input_text or input_image is required")
 

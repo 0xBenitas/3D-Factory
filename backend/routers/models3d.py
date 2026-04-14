@@ -12,6 +12,7 @@ Cf. ARCHITECTURE §"Models" :
 from __future__ import annotations
 
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Any, Literal
 
@@ -182,6 +183,24 @@ def get_glb(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
         media_type="model/gltf-binary",
         filename=f"model_{model_id}.glb",
     )
+
+
+# --------------------------------------------------------------------------- #
+# GET /api/models/{id}/input-image — photo source (si input_type="image")
+# --------------------------------------------------------------------------- #
+
+@router.get("/{model_id}/input-image")
+def get_input_image(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    if not m.input_image_path:
+        raise HTTPException(404, "No input image for this model")
+    path = Path(m.input_image_path)
+    if not path.is_file():
+        raise HTTPException(404, f"Input image file missing on disk: {path}")
+    mime, _ = mimetypes.guess_type(path.name)
+    return FileResponse(path, media_type=mime or "image/jpeg")
 
 
 # --------------------------------------------------------------------------- #

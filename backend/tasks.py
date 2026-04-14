@@ -310,11 +310,15 @@ async def _run_repair_and_score(
         _fail(model_id, f"Mesh repair failed: {exc}")
         return
 
+    # Même borne que `pipeline_error` : les logs de repair peuvent gonfler
+    # si pymeshfix/trimesh enchaînent des warnings — on cappe pour garder
+    # la table légère.
+    repair_log_raw = repair_result["repair_log"] or ""
     _update_model(
         model_id,
         stl_path=repair_result["stl_path"],
         mesh_metrics=repair_result["mesh_metrics"],
-        repair_log=repair_result["repair_log"],
+        repair_log=repair_log_raw[:2000],
     )
 
     _update_model(model_id, pipeline_status="scoring")

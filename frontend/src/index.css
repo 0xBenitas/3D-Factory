@@ -269,6 +269,16 @@ label > span { color: var(--text-muted); font-size: 0.85rem; }
   text-align: center;
   font-size: 0.85rem;
 }
+.detail__input-image { display: flex; flex-direction: column; gap: 0.4rem; }
+.detail__input-image-img {
+  max-width: 240px;
+  max-height: 240px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-hi);
+  object-fit: contain;
+  align-self: flex-start;
+}
 
 /* ---- ModelViewer ---- */
 .model-viewer {

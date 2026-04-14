@@ -3,7 +3,7 @@ import ModelActions from '../components/ModelActions.jsx'
 import ModelCard from '../components/ModelCard.jsx'
 import ModelViewer from '../components/ModelViewer.jsx'
 import ScoreCard from '../components/ScoreCard.jsx'
-import { getGlbUrl, getModel, listModels } from '../api.js'
+import { getGlbUrl, getInputImageUrl, getModel, listModels } from '../api.js'
 
 const FILTERS = [
   { key: 'all',      label: 'Tous' },
@@ -166,6 +166,17 @@ export default function ModelsPage() {
               {detail.pipeline_error && (
                 <div className="error detail__error">
                   <strong>Erreur pipeline :</strong> {detail.pipeline_error}
+                </div>
+              )}
+
+              {detail.input_type === 'image' && detail.input_image_path && (
+                <div className="detail__input-image">
+                  <strong>Photo source :</strong>
+                  <img
+                    src={getInputImageUrl(detail.id)}
+                    alt={`Input photo du modèle #${detail.id}`}
+                    className="detail__input-image-img"
+                  />
                 </div>
               )}
 
