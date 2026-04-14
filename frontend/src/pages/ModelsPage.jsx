@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import ExportPanel from '../components/ExportPanel.jsx'
 import ModelActions from '../components/ModelActions.jsx'
 import ModelCard from '../components/ModelCard.jsx'
 import ModelViewer from '../components/ModelViewer.jsx'
 import ScoreCard from '../components/ScoreCard.jsx'
-import { getGlbUrl, getModel, listModels } from '../api.js'
+import { getGlbUrl, getInputImageUrl, getModel, listModels } from '../api.js'
 
 const FILTERS = [
   { key: 'all',      label: 'Tous' },
@@ -20,8 +21,10 @@ const SORTS = [
 ]
 
 // Statuts pipeline qui doivent être auto-rafraîchis (un modèle en cours
-// de génération depuis la grille).
-const RUNNING_STATUSES = new Set(['prompt', 'generating', 'repairing', 'scoring'])
+// de génération OU d'export depuis la grille).
+const RUNNING_STATUSES = new Set([
+  'prompt', 'generating', 'repairing', 'scoring', 'photos', 'packing',
+])
 
 export default function ModelsPage() {
   const [models, setModels] = useState([])
@@ -169,6 +172,17 @@ export default function ModelsPage() {
                 </div>
               )}
 
+              {detail.input_type === 'image' && detail.input_image_path && (
+                <div className="detail__input-image">
+                  <strong>Photo source :</strong>
+                  <img
+                    src={getInputImageUrl(detail.id)}
+                    alt={`Input photo du modèle #${detail.id}`}
+                    className="detail__input-image-img"
+                  />
+                </div>
+              )}
+
               {(detail.optimized_prompt || detail.input_text) && (
                 <div className="detail__prompt">
                   <strong>
@@ -190,11 +204,8 @@ export default function ModelsPage() {
 
               <ModelActions model={detail} onChanged={handleActionDone} />
 
-              {/* Phase 4 : ExportPanel arrive ici */}
               {detail.validation === 'approved' && (
-                <div className="detail__phase4-placeholder muted">
-                  Export (photos lifestyle + ZIP) — arrive en Phase 4.
-                </div>
+                <ExportPanel model={detail} onChanged={handleActionDone} />
               )}
             </div>
           )}

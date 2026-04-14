@@ -2,39 +2,49 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getPipelineStatus } from '../api.js'
 
-// Ordre canonique des étapes du pipeline (cf. SPECS §4.2).
+// Phase génération uniquement (étapes 1-5). Les étapes "photos" et
+// "packing" sont déclenchées depuis /models via ExportPanel après
+// approbation humaine — les afficher ici serait trompeur car elles ne
+// se lancent pas automatiquement (cf. UX review).
 const STEPS = [
   { key: 'prompt',     label: 'Prompt' },
   { key: 'generating', label: 'Génération 3D' },
   { key: 'repairing',  label: 'Repair' },
   { key: 'scoring',    label: 'Score' },
-  { key: 'pending',    label: 'Validation' },
-  { key: 'photos',     label: 'Photos' },      // Phase 4+
-  { key: 'packing',    label: 'Export' },      // Phase 4+
+  { key: 'pending',    label: 'Validation', awaitUser: true },
 ]
 
 const TERMINAL_STATUSES = new Set(['pending', 'done', 'failed'])
 
-function stepState(currentStatus, currentError, stepKey) {
+function stepState(currentStatus, stepKey) {
   // "failed" : on renvoie ❌ pour l'étape en cours + ○ pour les suivantes.
   if (currentStatus === 'failed') {
-    const failedIdx = STEPS.findIndex((s) => s.key === stepKey)
+    const thisIdx = STEPS.findIndex((s) => s.key === stepKey)
     // On ne sait pas exactement où ça a cassé ; on met ❌ sur "prompt"
     // par convention (l'erreur affichée précise l'étape).
-    return failedIdx === 0 ? 'error' : 'idle'
+    return thisIdx === 0 ? 'error' : 'idle'
+  }
+  // "done" / "photos" / "packing" : la phase génération est terminée,
+  // toutes ses étapes sont done.
+  if (['done', 'photos', 'packing'].includes(currentStatus)) {
+    return 'done'
   }
   const currentIdx = STEPS.findIndex((s) => s.key === currentStatus)
   const thisIdx = STEPS.findIndex((s) => s.key === stepKey)
   if (currentIdx === -1 || thisIdx === -1) return 'idle'
   if (thisIdx < currentIdx) return 'done'
-  if (thisIdx === currentIdx) return 'active'
+  if (thisIdx === currentIdx) {
+    // "Validation" est en attente de l'utilisateur, pas un process actif.
+    return STEPS[thisIdx].awaitUser ? 'await_user' : 'active'
+  }
   return 'idle'
 }
 
 function StepIcon({ state }) {
-  if (state === 'done')   return <span className="step__icon step__icon--done">✓</span>
-  if (state === 'active') return <span className="step__icon step__icon--active">⏳</span>
-  if (state === 'error')  return <span className="step__icon step__icon--error">✕</span>
+  if (state === 'done')       return <span className="step__icon step__icon--done">✓</span>
+  if (state === 'active')     return <span className="step__icon step__icon--active">⏳</span>
+  if (state === 'await_user') return <span className="step__icon step__icon--await">→</span>
+  if (state === 'error')      return <span className="step__icon step__icon--error">✕</span>
   return <span className="step__icon step__icon--idle">○</span>
 }
 
@@ -82,7 +92,7 @@ export default function PipelineTracker({ modelId }) {
 
       <ol className="pipeline-tracker__steps">
         {STEPS.map((s) => {
-          const state = stepState(status.pipeline_status, status.pipeline_error, s.key)
+          const state = stepState(status.pipeline_status, s.key)
           return (
             <li key={s.key} className={`step step--${state}`}>
               <StepIcon state={state} />

@@ -13,7 +13,9 @@ export default function ModelActions({ model, onChanged }) {
 
   const disabled =
     busy ||
-    ['prompt', 'generating', 'repairing', 'scoring'].includes(model.pipeline_status)
+    ['prompt', 'generating', 'repairing', 'scoring', 'photos', 'packing'].includes(
+      model.pipeline_status,
+    )
 
   const wrap = async (fn) => {
     setBusy(true)

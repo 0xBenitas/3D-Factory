@@ -12,6 +12,7 @@ Cf. ARCHITECTURE §"Models" :
 from __future__ import annotations
 
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, asc
 from sqlalchemy.orm import Session
 
+from app_settings import check_budget_or_raise
 from database import get_db
 from models import Model
 from tasks import run_pipeline_guarded, run_remesh_guarded
@@ -185,6 +187,24 @@ def get_glb(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
 
 
 # --------------------------------------------------------------------------- #
+# GET /api/models/{id}/input-image — photo source (si input_type="image")
+# --------------------------------------------------------------------------- #
+
+@router.get("/{model_id}/input-image")
+def get_input_image(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    if not m.input_image_path:
+        raise HTTPException(404, "No input image for this model")
+    path = Path(m.input_image_path)
+    if not path.is_file():
+        raise HTTPException(404, f"Input image file missing on disk: {path}")
+    mime, _ = mimetypes.guess_type(path.name)
+    return FileResponse(path, media_type=mime or "image/jpeg")
+
+
+# --------------------------------------------------------------------------- #
 # PUT /api/models/{id}/validate
 # --------------------------------------------------------------------------- #
 
@@ -244,8 +264,10 @@ def regenerate_model(
     m = db.get(Model, model_id)
     if m is None:
         raise HTTPException(404, f"Model {model_id} not found")
-    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring"):
-        raise HTTPException(409, "Pipeline already running for this model")
+    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
+        raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
+
+    check_budget_or_raise(db)
 
     # Reset les champs du pipeline — garde l'input + engine + optimized_prompt
     # précédent (utile si prompt_override est null, on pourra ré-optimiser).
@@ -286,8 +308,10 @@ def remesh_model(
             400,
             "Cannot remesh: no engine_task_id (original generation missing)",
         )
-    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring"):
-        raise HTTPException(409, "Pipeline already running for this model")
+    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
+        raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
+
+    check_budget_or_raise(db)
 
     m.pipeline_status = "generating"
     m.pipeline_error = None

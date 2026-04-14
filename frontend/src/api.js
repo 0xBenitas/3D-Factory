@@ -57,6 +57,8 @@ export const getModel = (id) => request(`/api/models/${id}`)
 
 export const getGlbUrl = (id) => `/api/models/${id}/glb`
 
+export const getInputImageUrl = (id) => `/api/models/${id}/input-image`
+
 export const validateModel = (id, action, reason = null) =>
   request(`/api/models/${id}/validate`, {
     method: 'PUT',
@@ -80,3 +82,32 @@ export const remeshModel = (id, targetPolycount = 30000) =>
 // ---------------------------------------------------------------------- //
 
 export const listEngines = () => request('/api/engines')
+
+export const listImageEngines = () => request('/api/image-engines')
+
+export const listTemplates = () => request('/api/templates')
+
+// ---------------------------------------------------------------------- //
+// Exports
+// ---------------------------------------------------------------------- //
+
+export const generateExport = (payload) =>
+  request('/api/exports/generate', { method: 'POST', body: payload })
+
+export const listExports = (modelId) =>
+  request(`/api/exports?model_id=${modelId}`)
+
+export const getExportZipUrl = (id) => `/api/exports/${id}/zip`
+
+export const getExportListingUrl = (id) => `/api/exports/${id}/listing`
+
+// ---------------------------------------------------------------------- //
+// Settings + Stats
+// ---------------------------------------------------------------------- //
+
+export const getSettings = () => request('/api/settings')
+
+export const updateSettings = (patch) =>
+  request('/api/settings', { method: 'PUT', body: patch })
+
+export const getStats = () => request('/api/stats')
