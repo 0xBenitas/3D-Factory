@@ -23,6 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import config
 from auth import basic_auth_middleware
 from database import init_db
+from routers import exports as exports_router
 from routers import models3d as models3d_router
 from routers import pipeline as pipeline_router
 from routers import services as services_router
@@ -80,6 +81,7 @@ def health() -> dict[str, str]:
 # Routers métier
 app.include_router(pipeline_router.router)
 app.include_router(models3d_router.router)
+app.include_router(exports_router.router)
 app.include_router(services_router.router)
 
 

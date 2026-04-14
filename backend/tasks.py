@@ -1,15 +1,19 @@
 """Orchestrateur du pipeline — exécuté via FastAPI BackgroundTasks.
 
-Phase 2 du pipeline : étapes 1 → 4 (PROMPT, FORGE, REPAIR, SCORE).
-Les étapes 5-7 (VALIDATION, STUDIO, PACK) arrivent en Phase 3/4 : le
-pipeline s'arrête à `pipeline_status="pending"` pour validation humaine.
+- Pipeline génération (étapes 1-4) : `run_pipeline_guarded`.
+- Pipeline remesh (sous-cas de FORGE + REPAIR + SCORE) : `run_remesh_guarded`.
+- Pipeline export (étapes 6-7 : STUDIO + PACK) : `run_export_guarded`,
+  déclenché par POST /api/exports/generate après validation humaine.
 
 Règles (cf. SPECS §5) :
 - Sémaphore global : max 2 pipelines simultanés (évite de spammer les APIs).
 - Retry async avec backoff exponentiel pour les erreurs transitoires.
-- Chaque erreur met `pipeline_status="failed"` + `pipeline_error=...`.
+- Chaque erreur fatale met `pipeline_status="failed"` + `pipeline_error=...`.
 - Le scoring est best-effort : si Claude échoue, score=None et le
   pipeline continue vers "pending".
+- L'export est best-effort par sous-étape : screenshots ou photos qui
+  échouent ne bloquent pas le PACK (SPECS §5 étape 6). Seul le packaging
+  STL est fatal.
 """
 
 from __future__ import annotations
@@ -31,8 +35,14 @@ from engines.base import (
     RETRYABLE as ENGINE_RETRYABLE,
     RateLimited,
 )
-from models import Model
-from services import mesh_repair, prompt_optimizer, quality_scorer
+from image_engines import get_image_engine
+from image_engines.base import (
+    NON_RETRYABLE as IMAGE_NON_RETRYABLE,
+    RETRYABLE as IMAGE_RETRYABLE,
+)
+from models import Export, Model
+from services import mesh_repair, packager, prompt_optimizer, quality_scorer, screenshot, seo_gen
+from templates import get_template
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +373,180 @@ def _add_cost_and_set_paths(
 
 
 # --------------------------------------------------------------------------- #
+# Pipeline export (étapes 6-7 : STUDIO + PACK)
+# --------------------------------------------------------------------------- #
+
+# Fallback lifestyle prompt si Claude échoue : assez générique pour que
+# Stability sorte quelque chose d'utilisable.
+_LIFESTYLE_FALLBACK = (
+    "3D printed white {desc}, soft natural light, minimal background, "
+    "product photography"
+)
+
+
+async def run_export_pipeline(model_id: int, template_name: str) -> None:
+    """Orchestre les étapes 6-7 pour un modèle approuvé.
+
+    Pré-requis : model.validation == "approved" + stl_path + glb_path +
+    mesh_metrics. C'est le router qui vérifie ces invariants.
+    """
+    async with PIPELINE_SEMAPHORE:
+        try:
+            await _run_export_inner(model_id, template_name)
+        except Exception as exc:
+            _fail(model_id, f"Unhandled export error: {exc}")
+            logger.exception("Export pipeline #%d crashed", model_id)
+
+
+async def _run_export_inner(model_id: int, template_name: str) -> None:
+    # Snapshot de l'état (les BackgroundTasks sont hors session web).
+    with SessionLocal() as db:
+        m = db.get(Model, model_id)
+        if m is None:
+            logger.error("Model %d not found for export", model_id)
+            return
+        input_text = m.input_text or "(photo input)"
+        stl_path = m.stl_path
+        glb_path = m.glb_path
+        mesh_metrics = m.mesh_metrics or {}
+        image_engine_name = m.image_engine or config.DEFAULT_IMAGE_ENGINE
+
+    if not stl_path or not glb_path or not mesh_metrics:
+        _fail(model_id, "Cannot export: model missing stl_path/glb_path/mesh_metrics")
+        return
+
+    try:
+        template = get_template(template_name)
+    except KeyError as exc:
+        _fail(model_id, str(exc))
+        return
+
+    screenshots_dir = config.DATA_DIR / "screenshots" / str(model_id)
+    photos_dir = config.DATA_DIR / "photos" / str(model_id)
+    exports_dir = config.DATA_DIR / "exports"
+
+    logger.info("Export pipeline #%d start (template=%s, image_engine=%s)",
+                model_id, template_name, image_engine_name)
+
+    # ----- Étape 6 : STUDIO ------------------------------------------------- #
+    _update_model(model_id, pipeline_status="photos", pipeline_error=None)
+
+    # 6a) Screenshots — non bloquant (SPECS §5 étape 6 "pyrender fail").
+    screenshot_paths: list[str] = []
+    try:
+        screenshot_paths = await asyncio.to_thread(
+            screenshot.generate_screenshots,
+            glb_path, str(screenshots_dir),
+        )
+    except screenshot.ScreenshotError as exc:
+        logger.warning("Export #%d: screenshots skipped: %s", model_id, exc)
+
+    # 6b) Prompt lifestyle — fallback si Claude échoue.
+    try:
+        lifestyle_prompt = await retry_async(
+            seo_gen.generate_lifestyle_prompt,
+            input_text,
+            retry_on=(seo_gen.SeoGenError,),
+            non_retryable=seo_gen.NON_RETRYABLE,
+        )
+    except Exception as exc:
+        logger.warning("Export #%d: lifestyle prompt failed, fallback: %s", model_id, exc)
+        lifestyle_prompt = _LIFESTYLE_FALLBACK.format(desc=input_text[:120])
+
+    # 6c) Photos — non bloquant (SPECS §5 étape 6).
+    photo_paths: list[str] = []
+    try:
+        image_engine = get_image_engine(image_engine_name)
+    except KeyError as exc:
+        logger.warning("Export #%d: image engine unknown, skipping photos: %s",
+                       model_id, exc)
+        image_engine = None
+
+    if image_engine is not None:
+        try:
+            photo_paths = await retry_async(
+                image_engine.generate,
+                lifestyle_prompt, str(photos_dir), 3, None,
+                retry_on=IMAGE_RETRYABLE,
+                non_retryable=IMAGE_NON_RETRYABLE,
+            )
+        except Exception as exc:
+            logger.warning("Export #%d: photos failed (non-blocking): %s",
+                           model_id, exc)
+
+    _update_model(
+        model_id,
+        screenshot_paths=screenshot_paths or None,
+        photo_paths=photo_paths or None,
+    )
+
+    # ----- Étape 7 : PACK --------------------------------------------------- #
+    _update_model(model_id, pipeline_status="packing")
+
+    # 7a) Listing SEO — fallback minimal si Claude échoue (SPECS §5 étape 7).
+    try:
+        listing = await retry_async(
+            seo_gen.generate_listing,
+            input_text, mesh_metrics, template.name,
+            template.max_title_length, template.max_description_length,
+            template.max_tags, template.tone,
+            retry_on=(seo_gen.SeoGenError,),
+            non_retryable=seo_gen.NON_RETRYABLE,
+        )
+    except Exception as exc:
+        logger.warning("Export #%d: listing failed, using fallback: %s", model_id, exc)
+        listing = {
+            "title": f"Model #{model_id}",
+            "description": input_text,
+            "tags": [],
+            "price_eur": 0.0,
+        }
+
+    # 7b) Print params — fallback aux defaults si Claude échoue.
+    try:
+        print_params = await retry_async(
+            seo_gen.generate_print_params,
+            input_text, mesh_metrics,
+            retry_on=(seo_gen.SeoGenError,),
+            non_retryable=seo_gen.NON_RETRYABLE,
+        )
+    except Exception as exc:
+        logger.warning("Export #%d: print_params failed, using defaults: %s",
+                       model_id, exc)
+        print_params = dict(seo_gen.DEFAULT_PRINT_PARAMS)
+
+    # 7c) Packaging ZIP — fatal si échec (on ne peut pas livrer sans).
+    listing_text = template.format_listing(listing, print_params)
+    try:
+        zip_path = await asyncio.to_thread(
+            packager.build_zip,
+            model_id, stl_path, photo_paths, listing_text,
+            listing["title"], str(exports_dir),
+        )
+    except packager.PackagerError as exc:
+        _fail(model_id, f"Packaging failed: {exc}")
+        return
+
+    # 7d) Persister l'Export en BDD.
+    with SessionLocal() as db:
+        ex = Export(
+            model_id=model_id,
+            template=template.name,
+            title=listing["title"],
+            description=listing["description"],
+            tags=listing["tags"],
+            price_suggested=listing["price_eur"],
+            print_params=print_params,
+            zip_path=zip_path,
+        )
+        db.add(ex)
+        db.commit()
+
+    _update_model(model_id, pipeline_status="done")
+    logger.info("Export pipeline #%d DONE (zip=%s)", model_id, zip_path)
+
+
+# --------------------------------------------------------------------------- #
 # Garde anti-doublon : évite deux pipelines parallèles sur le même model_id.
 # --------------------------------------------------------------------------- #
 
@@ -389,6 +573,16 @@ async def run_remesh_guarded(model_id: int, target_polycount: int) -> None:
         return
     try:
         await run_remesh_pipeline(model_id, target_polycount)
+    finally:
+        await _release(model_id)
+
+
+async def run_export_guarded(model_id: int, template_name: str) -> None:
+    """Lance `run_export_pipeline` avec anti-doublon sur model_id."""
+    if not await _acquire(model_id):
+        return
+    try:
+        await run_export_pipeline(model_id, template_name)
     finally:
         await _release(model_id)
 

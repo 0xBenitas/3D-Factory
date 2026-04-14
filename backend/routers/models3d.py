@@ -263,8 +263,8 @@ def regenerate_model(
     m = db.get(Model, model_id)
     if m is None:
         raise HTTPException(404, f"Model {model_id} not found")
-    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring"):
-        raise HTTPException(409, "Pipeline already running for this model")
+    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
+        raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
 
     # Reset les champs du pipeline — garde l'input + engine + optimized_prompt
     # précédent (utile si prompt_override est null, on pourra ré-optimiser).
@@ -305,8 +305,8 @@ def remesh_model(
             400,
             "Cannot remesh: no engine_task_id (original generation missing)",
         )
-    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring"):
-        raise HTTPException(409, "Pipeline already running for this model")
+    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
+        raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
 
     m.pipeline_status = "generating"
     m.pipeline_error = None

@@ -82,3 +82,21 @@ export const remeshModel = (id, targetPolycount = 30000) =>
 // ---------------------------------------------------------------------- //
 
 export const listEngines = () => request('/api/engines')
+
+export const listImageEngines = () => request('/api/image-engines')
+
+export const listTemplates = () => request('/api/templates')
+
+// ---------------------------------------------------------------------- //
+// Exports
+// ---------------------------------------------------------------------- //
+
+export const generateExport = (payload) =>
+  request('/api/exports/generate', { method: 'POST', body: payload })
+
+export const listExports = (modelId) =>
+  request(`/api/exports?model_id=${modelId}`)
+
+export const getExportZipUrl = (id) => `/api/exports/${id}/zip`
+
+export const getExportListingUrl = (id) => `/api/exports/${id}/listing`
