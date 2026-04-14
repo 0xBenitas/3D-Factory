@@ -4,12 +4,18 @@ import EngineSelector from './EngineSelector.jsx'
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const ACCEPTED_MIMES = ['image/jpeg', 'image/png']
 
+// Coûts approximatifs (cohérents avec backend/costs.py). Juste un hint UI,
+// la valeur réelle est calculée côté serveur et affichée dans le CostTracker.
+const COST_GEN_EUR = 0.11       // prompt (~0,003) + meshy preview (~0,10) + scoring (~0,005)
+const COST_EXPORT_EUR = 0.10    // lifestyle + 3×stability + listing + print_params
+
 // InputForm — textarea OU drop image + EngineSelector + bouton Go.
 // SPECS §4.1 :
 // - Si texte + image : le texte est prioritaire (image ignorée)
 // - Disabled si aucun des deux
 // - Validation client : jpeg/png, max 5MB
-export default function InputForm({ onSubmit, busy = false }) {
+// - Disabled si `disabledReason` fourni (ex: budget dépassé)
+export default function InputForm({ onSubmit, busy = false, disabledReason = null }) {
   const [text, setText] = useState('')
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
@@ -45,7 +51,10 @@ export default function InputForm({ onSubmit, busy = false }) {
   }
 
   const canSubmit =
-    !busy && engine && (text.trim().length > 0 || imageFile !== null)
+    !busy &&
+    !disabledReason &&
+    engine &&
+    (text.trim().length > 0 || imageFile !== null)
 
   const fileToDataUrl = (file) =>
     new Promise((resolve, reject) => {
@@ -106,16 +115,23 @@ export default function InputForm({ onSubmit, busy = false }) {
       </label>
 
       <div className="input-form__controls">
-        <EngineSelector value={engine} onChange={setEngine} disabled={busy} />
+        <EngineSelector value={engine} onChange={setEngine} disabled={busy || !!disabledReason} />
         <button
           type="submit"
           className="btn btn--primary"
           disabled={!canSubmit}
+          title={disabledReason || undefined}
         >
           {busy ? 'Envoi…' : '🚀 Générer'}
         </button>
       </div>
 
+      <div className="input-form__hint muted">
+        Coût estimé : <strong>~{COST_GEN_EUR.toFixed(2)}€</strong> pour la génération
+        {' '}· <strong>+{COST_EXPORT_EUR.toFixed(2)}€</strong> si tu valides et exportes.
+      </div>
+
+      {disabledReason && <div className="error">{disabledReason}</div>}
       {error && <div className="error">{error}</div>}
     </form>
   )

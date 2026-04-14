@@ -14,6 +14,11 @@ import {
 // - Pendant "photos"/"packing" : spinner + auto-refresh.
 const RUNNING_STATUSES = new Set(['photos', 'packing'])
 
+// Délai max (ms) avant de considérer qu'un POST /generate a échoué
+// silencieusement (le pipeline_status n'est jamais passé en photos/packing).
+// Au-delà, on retire l'état "démarrage" pour ne pas bloquer l'UI.
+const START_WATCHDOG_MS = 15000
+
 export default function ExportPanel({ model, onChanged }) {
   const [templates, setTemplates] = useState([])
   const [template, setTemplate] = useState('')
@@ -22,6 +27,10 @@ export default function ExportPanel({ model, onChanged }) {
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
   const [loading, setLoading] = useState(true)
+  // True entre le POST /generate réussi et la transition observée
+  // pipeline_status → photos/packing (évite le "trou" de 3s où l'UI
+  // affichait "Aucun export encore généré" avant le prochain poll).
+  const [starting, setStarting] = useState(false)
 
   // Charge la liste des templates une fois au mount.
   useEffect(() => {
@@ -68,13 +77,26 @@ export default function ExportPanel({ model, onChanged }) {
   const latest = exports_[0] || null
   const pipelineBusy = RUNNING_STATUSES.has(model.pipeline_status)
 
+  // Dès qu'on observe la transition photos/packing (ou un nouvel export),
+  // on peut retirer l'état de démarrage.
+  useEffect(() => {
+    if (starting && pipelineBusy) setStarting(false)
+  }, [starting, pipelineBusy])
+
   const handleGenerate = async () => {
     if (!template) return
     setBusy(true)
     setError(null)
     try {
       await generateExport({ model_id: model.id, template })
-      // Déclenche le prochain poll depuis ModelsPage qui observe le status.
+      // Entre ce point et le prochain poll de ModelsPage (~3s), le
+      // pipeline_status est encore sur sa valeur précédente ("pending"/
+      // "done"). On affiche un état "démarrage" pour éviter le flash
+      // "Aucun export encore généré".
+      setStarting(true)
+      // Watchdog : si la transition n'arrive jamais (échec silencieux du
+      // background task), on débloque l'UI au bout de 15s.
+      setTimeout(() => setStarting((s) => (s ? false : s)), START_WATCHDOG_MS)
       onChanged?.()
     } catch (exc) {
       setError(exc.detail || exc.message)
@@ -131,7 +153,13 @@ export default function ExportPanel({ model, onChanged }) {
         </div>
       )}
 
-      {!pipelineBusy && latest && (
+      {!pipelineBusy && starting && (
+        <div className="export-panel__running muted">
+          ⚙️ Démarrage de l'export…
+        </div>
+      )}
+
+      {!pipelineBusy && !starting && latest && (
         <div className="export-panel__result">
           <div className="export-panel__title">
             <strong>{latest.title || `Export #${latest.id}`}</strong>
@@ -182,7 +210,7 @@ export default function ExportPanel({ model, onChanged }) {
         </div>
       )}
 
-      {!pipelineBusy && !latest && !loading && (
+      {!pipelineBusy && !starting && !latest && !loading && (
         <div className="export-panel__empty">
           <p className="muted">Aucun export encore généré.</p>
           <button

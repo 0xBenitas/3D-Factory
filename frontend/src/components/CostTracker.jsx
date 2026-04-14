@@ -4,9 +4,10 @@ import { getStats } from '../api.js'
 // SPECS §4.7 CostTracker — bandeau en bas de CreatePage.
 // Refresh toutes les 30s (SPECS). Ici on est plus agressif pendant qu'un
 // pipeline tourne (via la prop `boost`), 5s, pour voir le coût monter en
-// temps réel.
+// temps réel. Le parent peut observer l'état via `onStats` (appelé à
+// chaque refresh réussi) pour griser préventivement le bouton "Générer".
 
-export default function CostTracker({ boost = false }) {
+export default function CostTracker({ boost = false, onStats = null }) {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
 
@@ -20,6 +21,7 @@ export default function CostTracker({ boost = false }) {
         if (!cancelled) {
           setStats(s)
           setError(null)
+          onStats?.(s)
         }
       } catch (exc) {
         if (!cancelled) setError(exc.detail || exc.message)
@@ -32,6 +34,9 @@ export default function CostTracker({ boost = false }) {
       cancelled = true
       if (timer) clearInterval(timer)
     }
+    // onStats est volontairement hors deps : on ne veut pas relancer le
+    // polling si le parent change sa référence de callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boost])
 
   if (error) return <div className="cost-tracker cost-tracker--error">💰 {error}</div>
