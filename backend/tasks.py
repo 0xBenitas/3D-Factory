@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
 
 import config
+import costs
 from database import SessionLocal
 from engines import get_engine
 from engines.base import (
@@ -131,6 +132,22 @@ def _fail(model_id: int, error_msg: str) -> None:
     )
 
 
+def _add_eur_cost(model_id: int, amount: float) -> None:
+    """Incrémente `cost_eur_estimate` (cumulé sur la vie du modèle).
+
+    Utilisé par chaque étape facturante pour que `GET /api/stats` et le
+    CostTracker frontend puissent afficher un total réaliste.
+    """
+    if amount <= 0:
+        return
+    with SessionLocal() as db:
+        m = db.get(Model, model_id)
+        if m is None:
+            return
+        m.cost_eur_estimate = round((m.cost_eur_estimate or 0.0) + amount, 4)
+        db.commit()
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline principal
 # --------------------------------------------------------------------------- #
@@ -207,6 +224,7 @@ async def _run_pipeline_inner(
         except Exception as exc:
             _fail(model_id, f"Prompt optimization failed: {exc}")
             return
+        _add_eur_cost(model_id, costs.PROMPT_OPTIMIZE_EUR)
     _update_model(model_id, optimized_prompt=optimized)
 
     # ----- Étape 2 : FORGE --------------------------------------------------
@@ -239,6 +257,7 @@ async def _run_pipeline_inner(
         engine_task_id=gen_result.engine_task_id,
         extra_credits=gen_result.cost_credits,
     )
+    _add_eur_cost(model_id, costs.engine_generate_eur(engine_name))
     logger.info("Pipeline #%d: .glb generated in %.1fs",
                 model_id, gen_result.generation_time_s)
 
@@ -294,6 +313,7 @@ async def _run_remesh_inner(model_id: int, target_polycount: int) -> None:
         engine_task_id=gen_result.engine_task_id,
         extra_credits=gen_result.cost_credits,
     )
+    _add_eur_cost(model_id, costs.engine_remesh_eur(engine_name))
 
     await _run_repair_and_score(model_id, gen_result.glb_path, model_dir,
                                 object_desc=input_text or "(remeshed)")
@@ -348,6 +368,8 @@ async def _run_repair_and_score(
             "summary": score_result.summary,
         } if score_result.criteria or score_result.summary else None,
     )
+    if score_result.score is not None:
+        _add_eur_cost(model_id, costs.SCORING_EUR)
 
     _update_model(model_id, pipeline_status="pending")
     logger.info("Pipeline #%d DONE (status=pending, score=%s)",
@@ -442,6 +464,7 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
         logger.warning("Export #%d: screenshots skipped: %s", model_id, exc)
 
     # 6b) Prompt lifestyle — fallback si Claude échoue.
+    lifestyle_ok = False
     try:
         lifestyle_prompt = await retry_async(
             seo_gen.generate_lifestyle_prompt,
@@ -449,9 +472,12 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
             retry_on=(seo_gen.SeoGenError,),
             non_retryable=seo_gen.NON_RETRYABLE,
         )
+        lifestyle_ok = True
     except Exception as exc:
         logger.warning("Export #%d: lifestyle prompt failed, fallback: %s", model_id, exc)
         lifestyle_prompt = _LIFESTYLE_FALLBACK.format(desc=input_text[:120])
+    if lifestyle_ok:
+        _add_eur_cost(model_id, costs.LIFESTYLE_PROMPT_EUR)
 
     # 6c) Photos — non bloquant (SPECS §5 étape 6).
     photo_paths: list[str] = []
@@ -473,6 +499,9 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
         except Exception as exc:
             logger.warning("Export #%d: photos failed (non-blocking): %s",
                            model_id, exc)
+        # Facturer uniquement les photos réellement livrées.
+        if photo_paths:
+            _add_eur_cost(model_id, costs.STABILITY_PER_IMAGE_EUR * len(photo_paths))
 
     _update_model(
         model_id,
@@ -484,6 +513,7 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
     _update_model(model_id, pipeline_status="packing")
 
     # 7a) Listing SEO — fallback minimal si Claude échoue (SPECS §5 étape 7).
+    listing_ok = False
     try:
         listing = await retry_async(
             seo_gen.generate_listing,
@@ -493,6 +523,7 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
             retry_on=(seo_gen.SeoGenError,),
             non_retryable=seo_gen.NON_RETRYABLE,
         )
+        listing_ok = True
     except Exception as exc:
         logger.warning("Export #%d: listing failed, using fallback: %s", model_id, exc)
         listing = {
@@ -501,8 +532,11 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
             "tags": [],
             "price_eur": 0.0,
         }
+    if listing_ok:
+        _add_eur_cost(model_id, costs.LISTING_EUR)
 
     # 7b) Print params — fallback aux defaults si Claude échoue.
+    print_params_ok = False
     try:
         print_params = await retry_async(
             seo_gen.generate_print_params,
@@ -510,10 +544,13 @@ async def _run_export_inner(model_id: int, template_name: str) -> None:
             retry_on=(seo_gen.SeoGenError,),
             non_retryable=seo_gen.NON_RETRYABLE,
         )
+        print_params_ok = True
     except Exception as exc:
         logger.warning("Export #%d: print_params failed, using defaults: %s",
                        model_id, exc)
         print_params = dict(seo_gen.DEFAULT_PRINT_PARAMS)
+    if print_params_ok:
+        _add_eur_cost(model_id, costs.PRINT_PARAMS_EUR)
 
     # 7c) Packaging ZIP — fatal si échec (on ne peut pas livrer sans).
     listing_text = template.format_listing(listing, print_params)

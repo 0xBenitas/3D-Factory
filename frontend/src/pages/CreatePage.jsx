@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import CostTracker from '../components/CostTracker.jsx'
 import InputForm from '../components/InputForm.jsx'
 import PipelineTracker from '../components/PipelineTracker.jsx'
 import { startPipeline } from '../api.js'
@@ -41,6 +42,8 @@ export default function CreatePage() {
           </div>
         </>
       )}
+
+      <CostTracker boost={currentId !== null} />
     </section>
   )
 }

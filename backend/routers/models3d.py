@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, asc
 from sqlalchemy.orm import Session
 
+from app_settings import check_budget_or_raise
 from database import get_db
 from models import Model
 from tasks import run_pipeline_guarded, run_remesh_guarded
@@ -266,6 +267,8 @@ def regenerate_model(
     if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
         raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
 
+    check_budget_or_raise(db)
+
     # Reset les champs du pipeline — garde l'input + engine + optimized_prompt
     # précédent (utile si prompt_override est null, on pourra ré-optimiser).
     m.pipeline_status = "prompt"
@@ -307,6 +310,8 @@ def remesh_model(
         )
     if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
         raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
+
+    check_budget_or_raise(db)
 
     m.pipeline_status = "generating"
     m.pipeline_error = None

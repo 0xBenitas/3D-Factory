@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app_settings import check_budget_or_raise
 from database import get_db
 from models import Export, Model
 from tasks import run_export_guarded
@@ -122,6 +123,8 @@ def generate_export(
         get_template(payload.template)
     except KeyError as exc:
         raise HTTPException(400, str(exc))
+
+    check_budget_or_raise(db)
 
     background_tasks.add_task(run_export_guarded, payload.model_id, payload.template)
     logger.info("Export scheduled: model_id=%d, template=%s",

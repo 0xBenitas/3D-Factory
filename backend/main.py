@@ -27,6 +27,8 @@ from routers import exports as exports_router
 from routers import models3d as models3d_router
 from routers import pipeline as pipeline_router
 from routers import services as services_router
+from routers import settings as settings_router
+from routers import stats as stats_router
 
 
 class SPAStaticFiles(StaticFiles):
@@ -83,6 +85,8 @@ app.include_router(pipeline_router.router)
 app.include_router(models3d_router.router)
 app.include_router(exports_router.router)
 app.include_router(services_router.router)
+app.include_router(settings_router.router)
+app.include_router(stats_router.router)
 
 
 # --------------------------------------------------------------------------- #

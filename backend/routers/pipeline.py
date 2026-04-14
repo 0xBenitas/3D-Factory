@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 import config
+from app_settings import check_budget_or_raise, get_setting
 from database import get_db
 from engines import get_engine
 from models import Model
@@ -114,6 +115,8 @@ def _save_image(model_id: int, data: bytes, mime: str) -> str:
     return str(path)
 
 
+
+
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
@@ -133,14 +136,24 @@ async def run(
     - Le bouton frontend est disabled sans aucun input, mais on protège
       quand même côté serveur.
     """
-    # Résoudre le moteur (défaut depuis settings si absent)
-    engine_name = payload.engine or config.DEFAULT_ENGINE
+    # Budget guard (SPECS §"Garde-fous / Budget") — check AVANT de toucher
+    # aux APIs externes pour éviter tout nouveau coût sur dépassement.
+    check_budget_or_raise(db)
+
+    # Résoudre le moteur (défaut BDD → .env → fallback hardcodé)
+    engine_name = (
+        payload.engine
+        or get_setting(db, "default_engine", config.DEFAULT_ENGINE)
+    )
     try:
         engine_obj = get_engine(engine_name)
     except KeyError as exc:
         raise HTTPException(400, str(exc))
 
-    image_engine = payload.image_engine or config.DEFAULT_IMAGE_ENGINE
+    image_engine = (
+        payload.image_engine
+        or get_setting(db, "default_image_engine", config.DEFAULT_IMAGE_ENGINE)
+    )
 
     # Déterminer le type d'input — texte prioritaire sur image (SPECS §4.1).
     image_data: bytes | None = None

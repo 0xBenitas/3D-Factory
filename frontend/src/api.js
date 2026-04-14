@@ -100,3 +100,14 @@ export const listExports = (modelId) =>
 export const getExportZipUrl = (id) => `/api/exports/${id}/zip`
 
 export const getExportListingUrl = (id) => `/api/exports/${id}/listing`
+
+// ---------------------------------------------------------------------- //
+// Settings + Stats
+// ---------------------------------------------------------------------- //
+
+export const getSettings = () => request('/api/settings')
+
+export const updateSettings = (patch) =>
+  request('/api/settings', { method: 'PUT', body: patch })
+
+export const getStats = () => request('/api/stats')
