@@ -17,8 +17,25 @@ from pathlib import Path
 import anthropic
 
 import config
+from app_settings import get_prompt_instructions
 
 logger = logging.getLogger(__name__)
+
+
+def _compose_system(base: str) -> str:
+    """Ajoute les instructions utilisateur persistées au system prompt.
+
+    Les instructions apparaissent APRÈS les règles verbatim (elles peuvent
+    les compléter mais le modèle voit toujours les règles de base d'abord).
+    """
+    extra = get_prompt_instructions().strip()
+    if not extra:
+        return base
+    return (
+        f"{base}\n\n"
+        "Instructions supplémentaires de l'utilisateur (à respecter en plus des règles ci-dessus) :\n"
+        f"{extra}"
+    )
 
 MAX_PROMPT_CHARS = 600   # Limite Meshy (SPECS §1.1).
 MAX_TOKENS_REPLY = 400
@@ -66,9 +83,10 @@ NON_RETRYABLE: tuple[type[PromptOptimizerError], ...] = (
 
 
 def _client() -> anthropic.AsyncAnthropic:
-    if not config.ANTHROPIC_API_KEY:
-        raise PromptOptimizerAuthError("ANTHROPIC_API_KEY not configured in .env")
-    return anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+    key = config.get_api_key("anthropic")
+    if not key:
+        raise PromptOptimizerAuthError("ANTHROPIC_API_KEY not configured (set it in Settings)")
+    return anthropic.AsyncAnthropic(api_key=key)
 
 
 def _wrap_api_error(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
@@ -117,7 +135,7 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_SYSTEM_TEXT,
+            system=_compose_system(_SYSTEM_TEXT),
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
@@ -152,7 +170,7 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_SYSTEM_IMAGE,
+            system=_compose_system(_SYSTEM_IMAGE),
             messages=[
                 {
                     "role": "user",

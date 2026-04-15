@@ -74,11 +74,45 @@ def _resolve_data_dir(raw: str) -> Path:
 APP_USER: str = _get("APP_USER", "admin")
 APP_PASS: str = _get("APP_PASS", "")
 
-# APIs externes (peuvent être vides en Phase 1)
+# APIs externes (peuvent être vides en Phase 1) — valeurs initiales depuis .env.
+# À l'exécution, `get_api_key()` privilégie la valeur stockée en BDD (seedée depuis
+# ces constantes au 1er boot, puis modifiable via PUT /api/settings).
 ANTHROPIC_API_KEY: str = _get("ANTHROPIC_API_KEY", "")
 MESHY_API_KEY: str = _get("MESHY_API_KEY", "")
 TRIPO_API_KEY: str = _get("TRIPO_API_KEY", "")
 STABILITY_API_KEY: str = _get("STABILITY_API_KEY", "")
+
+
+_API_KEY_ENV_MAP: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "meshy": "MESHY_API_KEY",
+    "tripo": "TRIPO_API_KEY",
+    "stability": "STABILITY_API_KEY",
+}
+
+
+def get_api_key(name: str) -> str:
+    """Résout une clé API à l'exécution.
+
+    Priorité : valeur stockée en BDD (table `settings`, clé `api_key_<name>`)
+    puis variable d'environnement. Permet de configurer/mettre à jour les clés
+    via l'UI sans redémarrer.
+    """
+    key = name.lower()
+    env_var = _API_KEY_ENV_MAP.get(key)
+    if env_var is None:
+        return ""
+    try:
+        from database import SessionLocal
+        from models import Setting
+
+        with SessionLocal() as db:
+            row = db.get(Setting, f"api_key_{key}")
+            if row and row.value:
+                return str(row.value)
+    except Exception:
+        pass
+    return os.environ.get(env_var, "")
 
 # Défauts métier
 DEFAULT_ENGINE: str = _get("DEFAULT_ENGINE", "meshy")

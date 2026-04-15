@@ -134,9 +134,10 @@ DEFAULT_PRINT_PARAMS: dict[str, Any] = {
 # --------------------------------------------------------------------------- #
 
 def _client() -> anthropic.AsyncAnthropic:
-    if not config.ANTHROPIC_API_KEY:
-        raise SeoGenAuthError("ANTHROPIC_API_KEY not configured in .env")
-    return anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+    key = config.get_api_key("anthropic")
+    if not key:
+        raise SeoGenAuthError("ANTHROPIC_API_KEY not configured (set it in Settings)")
+    return anthropic.AsyncAnthropic(api_key=key)
 
 
 def _extract_text(message: anthropic.types.Message) -> str:

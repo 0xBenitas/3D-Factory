@@ -106,7 +106,8 @@ async def score_mesh(
     """Appelle Claude pour scorer le mesh. Ne lève jamais — retourne un
     résultat vide en cas d'échec (le pipeline doit continuer).
     """
-    if not config.ANTHROPIC_API_KEY:
+    key = config.get_api_key("anthropic")
+    if not key:
         logger.warning("QualityScorer: ANTHROPIC_API_KEY missing, skipping")
         return QualityScoreResult()
 
@@ -114,7 +115,7 @@ async def score_mesh(
         f"Type d'objet demandé : {object_description}\n"
         f"Métriques mesh :\n{json.dumps(mesh_metrics, indent=2)}"
     )
-    client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=key)
 
     try:
         message = await client.messages.create(

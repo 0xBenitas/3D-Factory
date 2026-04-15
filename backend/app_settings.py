@@ -31,6 +31,12 @@ from models import Model, Setting
 
 logger = logging.getLogger(__name__)
 
+# Clés API gérables via l'UI (stockées en BDD avec préfixe `api_key_`).
+API_KEY_NAMES: tuple[str, ...] = ("anthropic", "meshy", "tripo", "stability")
+API_KEY_SETTING_KEYS: frozenset[str] = frozenset(
+    f"api_key_{n}" for n in API_KEY_NAMES
+)
+
 # Clés connues exposées par l'API settings. Les PUT sur une clé inconnue
 # sont rejetés pour éviter le key-spam via l'API.
 KNOWN_KEYS: frozenset[str] = frozenset({
@@ -38,7 +44,25 @@ KNOWN_KEYS: frozenset[str] = frozenset({
     "default_image_engine",
     "default_template",
     "max_daily_budget_eur",
-})
+    "prompt_instructions",
+}) | API_KEY_SETTING_KEYS
+
+PROMPT_INSTRUCTIONS_MAX = 4000
+
+
+def get_prompt_instructions() -> str:
+    """Instructions utilisateur ajoutées au system prompt de Claude.
+
+    Lues à chaque appel (permet de modifier sans redémarrer). Retourne
+    une chaîne vide si non configurées ou en cas d'erreur DB.
+    """
+    try:
+        from database import SessionLocal
+
+        with SessionLocal() as db:
+            return get_setting(db, "prompt_instructions", "")
+    except Exception:
+        return ""
 
 
 def get_setting(db: Session, key: str, fallback: str = "") -> str:

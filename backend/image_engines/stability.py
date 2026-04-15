@@ -71,14 +71,15 @@ class StabilityEngine(ImageEngine):
         n_images: int = 3,
         screenshot_path: str | None = None,  # ignoré (text-to-image)
     ) -> list[str]:
-        if not config.STABILITY_API_KEY:
-            raise ImageEngineAuthError("STABILITY_API_KEY not configured in .env")
+        key = config.get_api_key("stability")
+        if not key:
+            raise ImageEngineAuthError("STABILITY_API_KEY not configured (set it in Settings)")
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         headers = {
-            "Authorization": f"Bearer {config.STABILITY_API_KEY}",
+            "Authorization": f"Bearer {key}",
             "Accept": "image/*",
         }
 

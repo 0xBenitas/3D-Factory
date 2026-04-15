@@ -18,12 +18,16 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from config import (
+    ANTHROPIC_API_KEY,
     DATA_DIR,
     DB_PATH,
     DEFAULT_ENGINE,
     DEFAULT_IMAGE_ENGINE,
     DEFAULT_TEMPLATE,
     MAX_DAILY_BUDGET_EUR,
+    MESHY_API_KEY,
+    STABILITY_API_KEY,
+    TRIPO_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,8 +93,33 @@ def init_db() -> None:
     import models  # noqa: F401  (enregistre les mappers sur Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    _apply_column_migrations()
     _seed_default_settings()
     logger.info("Database initialized at %s", DB_PATH)
+
+
+def _apply_column_migrations() -> None:
+    """Ajoute les colonnes manquantes sur des BDD existantes.
+
+    `create_all` ne modifie jamais les tables existantes ; on complète à
+    la main pour les colonnes ajoutées après coup. Idempotent.
+    """
+    migrations = [
+        # (table, column, ddl)
+        ("models", "pipeline_progress", "INTEGER"),
+        ("models", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    with engine.begin() as conn:
+        for table, column, ddl in migrations:
+            existing = {
+                row[1]
+                for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+                )
+                logger.info("Added column %s.%s", table, column)
 
 
 def _seed_default_settings() -> None:
@@ -103,10 +132,20 @@ def _seed_default_settings() -> None:
         "default_template": DEFAULT_TEMPLATE,
         "max_daily_budget_eur": str(MAX_DAILY_BUDGET_EUR),
     }
+    # Seed des clés API depuis .env si présentes (elles restent modifiables via l'UI ensuite).
+    api_key_seeds = {
+        "api_key_anthropic": ANTHROPIC_API_KEY,
+        "api_key_meshy": MESHY_API_KEY,
+        "api_key_tripo": TRIPO_API_KEY,
+        "api_key_stability": STABILITY_API_KEY,
+    }
 
     with SessionLocal() as db:
         for key, value in defaults.items():
             existing = db.get(Setting, key)
             if existing is None:
+                db.add(Setting(key=key, value=value))
+        for key, value in api_key_seeds.items():
+            if value and db.get(Setting, key) is None:
                 db.add(Setting(key=key, value=value))
         db.commit()

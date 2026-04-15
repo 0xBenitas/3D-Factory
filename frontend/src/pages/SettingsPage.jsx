@@ -113,10 +113,160 @@ export default function SettingsPage() {
         />
       </div>
 
+      <ApiKeysSection
+        apiKeys={settings.api_keys || {}}
+        onSave={save}
+        disabled={saving}
+      />
+
+      <PromptInstructionsCard
+        value={settings.prompt_instructions || ''}
+        max={settings.prompt_instructions_max || 4000}
+        onSave={(v) => save({ prompt_instructions: v })}
+        disabled={saving}
+      />
+
       {savedAt && <div className="settings-saved muted">✓ Enregistré</div>}
 
       {stats && <StatsOverview stats={stats} />}
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------- //
+// API keys
+
+const API_KEY_DEFS = [
+  { name: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...' },
+  { name: 'meshy', label: 'Meshy', placeholder: 'msy_...' },
+  { name: 'tripo', label: 'Tripo', placeholder: 'tsk_...' },
+  { name: 'stability', label: 'Stability AI', placeholder: 'sk-...' },
+]
+
+function ApiKeysSection({ apiKeys, onSave, disabled }) {
+  return (
+    <div className="stats-overview">
+      <h3>Clés API</h3>
+      <p className="muted">
+        Laissez vide pour ne pas modifier. Effacer le champ et enregistrer supprime la clé.
+      </p>
+      <div className="settings-grid">
+        {API_KEY_DEFS.map((def) => (
+          <ApiKeyCard
+            key={def.name}
+            def={def}
+            status={apiKeys[def.name] || { configured: false, masked: '' }}
+            onSave={(value) => onSave({ [`api_key_${def.name}`]: value })}
+            disabled={disabled}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PromptInstructionsCard({ value, max, onSave, disabled }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+
+  const changed = draft !== value
+  const over = draft.length > max
+
+  return (
+    <div className="stats-overview">
+      <h3>Instructions Claude (prompt optimizer)</h3>
+      <p className="muted">
+        Texte ajouté au system prompt à chaque génération. Utilise-le pour imposer
+        un style récurrent, des contraintes d'impression spécifiques, ou un vocabulaire
+        propre à tes produits. Laisse vide pour les règles par défaut.
+      </p>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        disabled={disabled}
+        rows={10}
+        placeholder={`Exemples :\n- Toujours proposer une base stable d'au moins 5mm d'épaisseur.\n- Privilégier les formes organiques plutôt que géométriques.\n- Si objet décoratif, suggérer des motifs en bas-relief (profondeur 2mm max).`}
+        style={{ width: '100%', fontFamily: 'inherit', fontSize: '0.9rem', padding: '0.6rem', boxSizing: 'border-box', resize: 'vertical' }}
+      />
+      <div className="settings-card__inline" style={{ marginTop: 8, justifyContent: 'space-between' }}>
+        <small className={over ? 'error' : 'muted'}>
+          {draft.length} / {max} caractères{over ? ' — dépassé' : ''}
+        </small>
+        <div className="settings-card__inline">
+          {changed && (
+            <button className="btn" onClick={() => setDraft(value)} disabled={disabled}>
+              Annuler
+            </button>
+          )}
+          <button
+            className="btn btn--primary"
+            onClick={() => onSave(draft)}
+            disabled={disabled || !changed || over}
+          >
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ApiKeyCard({ def, status, onSave, disabled }) {
+  const [draft, setDraft] = useState('')
+  const [show, setShow] = useState(false)
+
+  const save = () => {
+    onSave(draft)
+    setDraft('')
+    setShow(false)
+  }
+  const clear = () => {
+    if (!confirm(`Supprimer la clé ${def.label} ?`)) return
+    onSave('')
+    setDraft('')
+  }
+
+  return (
+    <div className="settings-card">
+      <label className="settings-card__label">{def.label}</label>
+      <div className="muted" style={{ marginBottom: 4 }}>
+        {status.configured ? `Configurée : ${status.masked}` : 'Non configurée'}
+      </div>
+      <div className="settings-card__inline">
+        <input
+          type={show ? 'text' : 'password'}
+          placeholder={def.placeholder}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={disabled}
+          autoComplete="off"
+        />
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setShow((s) => !s)}
+          disabled={disabled || !draft}
+        >
+          {show ? 'Masquer' : 'Afficher'}
+        </button>
+      </div>
+      <div className="settings-card__inline" style={{ marginTop: 6 }}>
+        <button
+          className="btn btn--primary"
+          onClick={save}
+          disabled={disabled || !draft}
+        >
+          Enregistrer
+        </button>
+        {status.configured && (
+          <button className="btn" onClick={clear} disabled={disabled}>
+            Supprimer
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 

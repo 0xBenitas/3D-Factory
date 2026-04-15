@@ -20,7 +20,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app_settings import KNOWN_KEYS, get_setting, set_setting
+from app_settings import (
+    API_KEY_NAMES,
+    API_KEY_SETTING_KEYS,
+    KNOWN_KEYS,
+    PROMPT_INSTRUCTIONS_MAX,
+    get_setting,
+    set_setting,
+)
 from database import get_db
 from engines import list_engines
 from image_engines import list_image_engines
@@ -36,12 +43,25 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 # --------------------------------------------------------------------------- #
 
 class SettingsPayload(BaseModel):
-    """Seules les clés connues sont acceptées (les autres sont rejetées 400)."""
+    """Seules les clés connues sont acceptées (les autres sont rejetées 400).
+
+    Pour les clés API : chaîne vide = effacer, non-fournie = inchangée.
+    """
 
     default_engine: str | None = Field(default=None, max_length=50)
     default_image_engine: str | None = Field(default=None, max_length=50)
     default_template: str | None = Field(default=None, max_length=50)
     max_daily_budget_eur: float | None = Field(default=None, ge=0.0, le=1000.0)
+    api_key_anthropic: str | None = Field(default=None, max_length=512)
+    api_key_meshy: str | None = Field(default=None, max_length=512)
+    api_key_tripo: str | None = Field(default=None, max_length=512)
+    api_key_stability: str | None = Field(default=None, max_length=512)
+    prompt_instructions: str | None = Field(default=None, max_length=PROMPT_INSTRUCTIONS_MAX)
+
+
+class ApiKeyStatus(BaseModel):
+    configured: bool
+    masked: str  # ex. "••••sk-1234" si set, "" sinon
 
 
 class SettingsView(BaseModel):
@@ -49,6 +69,17 @@ class SettingsView(BaseModel):
     default_image_engine: str
     default_template: str
     max_daily_budget_eur: float
+    api_keys: dict[str, ApiKeyStatus]
+    prompt_instructions: str
+    prompt_instructions_max: int = PROMPT_INSTRUCTIONS_MAX
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "••••"
+    return "••••" + value[-4:]
 
 
 # --------------------------------------------------------------------------- #
@@ -68,6 +99,10 @@ def _valid_template_names(db: Session) -> set[str]:
 
 
 def _read_all(db: Session) -> SettingsView:
+    api_keys: dict[str, ApiKeyStatus] = {}
+    for name in API_KEY_NAMES:
+        raw = get_setting(db, f"api_key_{name}", "")
+        api_keys[name] = ApiKeyStatus(configured=bool(raw), masked=_mask(raw))
     return SettingsView(
         default_engine=get_setting(db, "default_engine", "meshy"),
         default_image_engine=get_setting(db, "default_image_engine", "stability"),
@@ -75,6 +110,8 @@ def _read_all(db: Session) -> SettingsView:
         max_daily_budget_eur=_safe_float(
             get_setting(db, "max_daily_budget_eur", "2.00"), 2.00,
         ),
+        api_keys=api_keys,
+        prompt_instructions=get_setting(db, "prompt_instructions", ""),
     )
 
 
@@ -136,8 +173,10 @@ def update_settings(
             )
 
     for key, value in data.items():
-        set_setting(db, key, str(value))
+        set_setting(db, key, str(value).strip() if isinstance(value, str) else str(value))
     db.commit()
-    logger.info("Settings updated: %s", sorted(data.keys()))
+    # Log sans valeurs sensibles (clés API)
+    logged_keys = sorted(data.keys())
+    logger.info("Settings updated: %s", logged_keys)
 
     return _read_all(db)
