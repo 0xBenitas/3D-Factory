@@ -25,6 +25,8 @@ import httpx
 import config
 from engines import register
 from engines.base import (
+    CancelCheck,
+    CancelledByUser,
     Engine3D,
     EngineTaskFailed,
     EngineTransient,
@@ -32,12 +34,14 @@ from engines.base import (
     InsufficientCredits,
     InvalidApiKey,
     NotSupported,
+    ProgressCallback,
     RateLimited,
 )
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.meshy.ai/openapi/v2"
+REMESH_BASE_URL = "https://api.meshy.ai/openapi/v1"  # /remesh n'existe pas en v2
 AI_MODEL = "meshy-5"            # cf. SPECS §2.1 — 5 crédits preview
 TARGET_POLYCOUNT = 30000        # défaut Meshy
 POLL_INTERVAL_S = 5
@@ -51,10 +55,11 @@ COST_CREDITS_REMESH = 5
 # --------------------------------------------------------------------------- #
 
 def _headers() -> dict[str, str]:
-    if not config.MESHY_API_KEY:
-        raise InvalidApiKey("MESHY_API_KEY not configured in .env")
+    key = config.get_api_key("meshy")
+    if not key:
+        raise InvalidApiKey("MESHY_API_KEY not configured (set it in Settings)")
     return {
-        "Authorization": f"Bearer {config.MESHY_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
 
@@ -86,14 +91,22 @@ async def _poll_task(
     client: httpx.AsyncClient,
     task_id: str,
     endpoint: str,
+    progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> dict:
     """Poll une task Meshy jusqu'à SUCCEEDED / FAILED / timeout.
 
     `endpoint` : "text-to-3d", "image-to-3d", ou "remesh".
+    Le remesh vit sur l'API v1 (pas de /remesh en v2).
+    `progress_callback(pct)` est appelé à chaque poll avec le `progress` (0-100).
+    Si `cancel_check()` renvoie True, lève `CancelledByUser`.
     """
-    url = f"{BASE_URL}/{endpoint}/{task_id}"
+    base = REMESH_BASE_URL if endpoint == "remesh" else BASE_URL
+    url = f"{base}/{endpoint}/{task_id}"
     start = time.monotonic()
     while True:
+        if cancel_check is not None and cancel_check():
+            raise CancelledByUser(f"Meshy task {task_id} cancelled by user")
         elapsed = time.monotonic() - start
         if elapsed > POLL_TIMEOUT_S:
             raise EngineTaskFailed(
@@ -103,6 +116,13 @@ async def _poll_task(
         _raise_for_status(resp, f"poll {endpoint}")
         data = resp.json()
         status = data.get("status")
+        if progress_callback is not None:
+            pct = data.get("progress")
+            if isinstance(pct, (int, float)):
+                try:
+                    progress_callback(int(pct))
+                except Exception:
+                    pass  # ne jamais casser le poll pour un bug de callback
         if status == "SUCCEEDED":
             return data
         if status == "FAILED":
@@ -144,6 +164,8 @@ class MeshyEngine(Engine3D):
         prompt: str,
         image_path: str | None = None,
         output_dir: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> GenerationResult:
         start = time.monotonic()
 
@@ -183,7 +205,11 @@ class MeshyEngine(Engine3D):
             logger.info("Meshy %s task created: %s", endpoint, task_id)
 
             # 2) Poll
-            data = await _poll_task(client, task_id, endpoint)
+            data = await _poll_task(
+                client, task_id, endpoint,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
 
         # 3) Download
         glb_url = (data.get("model_urls") or {}).get("glb")
@@ -205,6 +231,8 @@ class MeshyEngine(Engine3D):
         engine_task_id: str,
         target_polycount: int,
         output_dir: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> GenerationResult:
         start = time.monotonic()
         payload = {
@@ -214,14 +242,18 @@ class MeshyEngine(Engine3D):
         }
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{BASE_URL}/remesh", headers=_headers(), json=payload
+                f"{REMESH_BASE_URL}/remesh", headers=_headers(), json=payload
             )
             _raise_for_status(resp, "create remesh")
             task_id = resp.json().get("result")
             if not task_id:
                 raise EngineTaskFailed("Meshy remesh: no task_id in response")
             logger.info("Meshy remesh task created: %s", task_id)
-            data = await _poll_task(client, task_id, "remesh")
+            data = await _poll_task(
+                client, task_id, "remesh",
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
 
         glb_url = (data.get("model_urls") or {}).get("glb")
         if not glb_url:
