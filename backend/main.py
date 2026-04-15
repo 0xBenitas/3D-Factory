@@ -23,6 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import config
 from auth import basic_auth_middleware
 from database import init_db
+from routers import credits as credits_router
 from routers import exports as exports_router
 from routers import models3d as models3d_router
 from routers import pipeline as pipeline_router
@@ -87,6 +88,7 @@ app.include_router(exports_router.router)
 app.include_router(services_router.router)
 app.include_router(settings_router.router)
 app.include_router(stats_router.router)
+app.include_router(credits_router.router)
 
 
 # --------------------------------------------------------------------------- #

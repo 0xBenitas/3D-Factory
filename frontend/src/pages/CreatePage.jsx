@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import CostTracker from '../components/CostTracker.jsx'
+import CreditsBar from '../components/CreditsBar.jsx'
 import InputForm from '../components/InputForm.jsx'
 import PipelineTracker from '../components/PipelineTracker.jsx'
 import { startPipeline } from '../api.js'
@@ -37,6 +38,8 @@ export default function CreatePage() {
         <h2>Create</h2>
         <p className="muted">Texte ou photo → .stl imprimable + score.</p>
       </div>
+
+      <CreditsBar />
 
       {currentId === null ? (
         <InputForm
