@@ -68,6 +68,15 @@ class PipelineStatusResponse(BaseModel):
     mesh_metrics: dict[str, Any] | None
     qc_details: dict[str, Any] | None
     cost_credits: int
+    cost_eur_estimate: float
+    pipeline_progress: int | None
+    cancel_requested: bool
+
+
+class PipelineCancelResponse(BaseModel):
+    model_id: int
+    pipeline_status: str
+    cancel_requested: bool
 
 
 # --------------------------------------------------------------------------- #
@@ -220,4 +229,45 @@ def status(model_id: int, db: Session = Depends(get_db)) -> PipelineStatusRespon
         mesh_metrics=m.mesh_metrics,
         qc_details=m.qc_details,
         cost_credits=m.cost_credits or 0,
+        cost_eur_estimate=float(m.cost_eur_estimate or 0.0),
+        pipeline_progress=m.pipeline_progress,
+        cancel_requested=bool(m.cancel_requested),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Cancel
+# --------------------------------------------------------------------------- #
+
+_TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled", "pending"})
+
+
+@router.post("/{model_id}/cancel", response_model=PipelineCancelResponse)
+def cancel(model_id: int, db: Session = Depends(get_db)) -> PipelineCancelResponse:
+    """Demande l'annulation coopérative du pipeline en cours.
+
+    Marque `cancel_requested=1`. Le moteur vérifie ce flag à chaque poll
+    et lève `CancelledByUser` si vrai. Les crédits API déjà engagés NE
+    SONT PAS remboursés — l'annulation évite le polling/téléchargement
+    des résultats ultérieurs mais pas la facturation.
+
+    Le statut final `cancelled` est posé par le pipeline après qu'il a
+    effectivement arrêté (en général < 5s). Avant ça, `cancel_requested`
+    est à True mais `pipeline_status` reste sur l'étape courante.
+    """
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    if m.pipeline_status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            409,
+            f"Pipeline already in terminal state ({m.pipeline_status})",
+        )
+    m.cancel_requested = 1
+    db.commit()
+    logger.info("Pipeline #%d: cancel requested", model_id)
+    return PipelineCancelResponse(
+        model_id=m.id,
+        pipeline_status=m.pipeline_status,
+        cancel_requested=True,
     )

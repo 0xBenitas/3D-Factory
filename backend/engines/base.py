@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Callable
 
 
 # --------------------------------------------------------------------------- #
@@ -48,6 +49,10 @@ class NotSupported(EngineError):
     """L'action demandée (ex. image-to-3d, remesh) n'est pas supportée."""
 
 
+class CancelledByUser(EngineError):
+    """Utilisateur a demandé l'annulation via /cancel. Non retryable."""
+
+
 # Exceptions retryables vs permanentes — utilisé par `tasks.retry_async`.
 RETRYABLE: tuple[type[EngineError], ...] = (RateLimited, EngineTransient)
 NON_RETRYABLE: tuple[type[EngineError], ...] = (
@@ -55,7 +60,12 @@ NON_RETRYABLE: tuple[type[EngineError], ...] = (
     InsufficientCredits,
     EngineTaskFailed,
     NotSupported,
+    CancelledByUser,
 )
+
+
+ProgressCallback = Callable[[int], None]
+CancelCheck = Callable[[], bool]
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +113,8 @@ class Engine3D(ABC):
         prompt: str,
         image_path: str | None = None,
         output_dir: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> GenerationResult:
         """Génère un modèle 3D à partir d'un prompt (+ image optionnelle).
 
@@ -120,6 +132,8 @@ class Engine3D(ABC):
         engine_task_id: str,
         target_polycount: int,
         output_dir: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> GenerationResult:
         """Remesh un modèle existant (ajuste poly count).
 

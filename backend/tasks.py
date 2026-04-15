@@ -28,6 +28,7 @@ import costs
 from database import SessionLocal
 from engines import get_engine
 from engines.base import (
+    CancelledByUser,
     EngineError,
     EngineTransient,
     InsufficientCredits,
@@ -132,6 +133,28 @@ def _fail(model_id: int, error_msg: str) -> None:
     )
 
 
+def _cancelled(model_id: int) -> None:
+    """Marque le pipeline comme annulé (statut terminal, pas d'erreur)."""
+    logger.info("Pipeline #%d CANCELLED by user", model_id)
+    _update_model(
+        model_id,
+        pipeline_status="cancelled",
+        pipeline_error=None,
+        pipeline_progress=None,
+    )
+
+
+def _is_cancel_requested(model_id: int) -> bool:
+    """Lit le flag `cancel_requested` dans une session courte."""
+    with SessionLocal() as db:
+        m = db.get(Model, model_id)
+        return bool(m and m.cancel_requested)
+
+
+def _set_progress(model_id: int, pct: int) -> None:
+    _update_model(model_id, pipeline_progress=max(0, min(100, int(pct))))
+
+
 def _add_eur_cost(model_id: int, amount: float) -> None:
     """Incrémente `cost_eur_estimate` (cumulé sur la vie du modèle).
 
@@ -162,6 +185,8 @@ async def run_pipeline(model_id: int, prompt_override: str | None = None) -> Non
     async with PIPELINE_SEMAPHORE:
         try:
             await _run_pipeline_inner(model_id, prompt_override=prompt_override)
+        except CancelledByUser:
+            _cancelled(model_id)
         except Exception as exc:
             # Garde-fou absolu : si quoi que ce soit remonte, on marque failed.
             _fail(model_id, f"Unhandled pipeline error: {exc}")
@@ -176,6 +201,8 @@ async def run_remesh_pipeline(model_id: int, target_polycount: int) -> None:
     async with PIPELINE_SEMAPHORE:
         try:
             await _run_remesh_inner(model_id, target_polycount)
+        except CancelledByUser:
+            _cancelled(model_id)
         except Exception as exc:
             _fail(model_id, f"Unhandled remesh error: {exc}")
             logger.exception("Remesh #%d crashed", model_id)
@@ -227,8 +254,12 @@ async def _run_pipeline_inner(
         _add_eur_cost(model_id, costs.PROMPT_OPTIMIZE_EUR)
     _update_model(model_id, optimized_prompt=optimized)
 
+    # Vérif annulation avant de démarrer une étape coûteuse.
+    if _is_cancel_requested(model_id):
+        raise CancelledByUser("cancelled before generation")
+
     # ----- Étape 2 : FORGE --------------------------------------------------
-    _update_model(model_id, pipeline_status="generating")
+    _update_model(model_id, pipeline_status="generating", pipeline_progress=0)
     try:
         engine = get_engine(engine_name)
     except KeyError as exc:
@@ -242,13 +273,19 @@ async def _run_pipeline_inner(
             optimized,
             input_image_path if input_type == "image" else None,
             str(model_dir),
+            progress_callback=lambda p, mid=model_id: _set_progress(mid, p),
+            cancel_check=lambda mid=model_id: _is_cancel_requested(mid),
         )
+    except CancelledByUser:
+        raise
     except (InvalidApiKey, InsufficientCredits) as exc:
         _fail(model_id, f"Engine refused: {exc}")
         return
     except Exception as exc:
         _fail(model_id, f"Engine generation failed: {exc}")
         return
+    finally:
+        _update_model(model_id, pipeline_progress=None)
 
     # Cumul des crédits (utile pour les regenerate / remesh multiples).
     _add_cost_and_set_paths(
@@ -284,8 +321,16 @@ async def _run_remesh_inner(model_id: int, target_polycount: int) -> None:
     logger.info("Remesh #%d start (engine=%s, target=%d)",
                 model_id, engine_name, target_polycount)
 
+    if _is_cancel_requested(model_id):
+        raise CancelledByUser("cancelled before remesh")
+
     # ----- FORGE (remesh) ---------------------------------------------------
-    _update_model(model_id, pipeline_status="generating", pipeline_error=None)
+    _update_model(
+        model_id,
+        pipeline_status="generating",
+        pipeline_error=None,
+        pipeline_progress=0,
+    )
     try:
         engine = get_engine(engine_name)
     except KeyError as exc:
@@ -299,13 +344,19 @@ async def _run_remesh_inner(model_id: int, target_polycount: int) -> None:
             engine_task_id,
             target_polycount,
             str(model_dir),
+            progress_callback=lambda p, mid=model_id: _set_progress(mid, p),
+            cancel_check=lambda mid=model_id: _is_cancel_requested(mid),
         )
+    except CancelledByUser:
+        raise
     except (InvalidApiKey, InsufficientCredits) as exc:
         _fail(model_id, f"Engine refused: {exc}")
         return
     except Exception as exc:
         _fail(model_id, f"Engine remesh failed: {exc}")
         return
+    finally:
+        _update_model(model_id, pipeline_progress=None)
 
     _add_cost_and_set_paths(
         model_id,
@@ -329,6 +380,8 @@ async def _run_repair_and_score(
 
     Extrait pour être partagé entre run_pipeline et run_remesh_pipeline.
     """
+    if _is_cancel_requested(model_id):
+        raise CancelledByUser("cancelled before repair")
     _update_model(model_id, pipeline_status="repairing")
     stl_path = str(model_dir / "model.stl")
     try:

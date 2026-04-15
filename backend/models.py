@@ -74,9 +74,14 @@ class Model(Base):
     cost_eur_estimate = Column(Float, nullable=False, default=0.0)
 
     # Pipeline — indexé : filtre "en cours" + poll rapide
-    # prompt | generating | repairing | scoring | pending | photos | packing | done | failed
+    # prompt | generating | repairing | scoring | pending | photos | packing | done | failed | cancelled
     pipeline_status = Column(String, nullable=False, default="prompt", index=True)
     pipeline_error = Column(Text, nullable=True)
+    # Progression fine de l'étape active (0-100, principalement Meshy pendant generating).
+    pipeline_progress = Column(Integer, nullable=True)
+    # Flag coopératif : l'utilisateur a demandé d'annuler. Les engines vérifient ce flag
+    # à chaque poll et lèvent CancelledByUser si vrai.
+    cancel_requested = Column(Integer, nullable=False, default=0)
 
     # Indexé : tri par date dans le dashboard (le plus récent d'abord)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)

@@ -44,6 +44,9 @@ export const startPipeline = (payload) =>
 export const getPipelineStatus = (modelId) =>
   request(`/api/pipeline/status/${modelId}`)
 
+export const cancelPipeline = (modelId) =>
+  request(`/api/pipeline/${modelId}/cancel`, { method: 'POST' })
+
 // ---------------------------------------------------------------------- //
 // Models
 // ---------------------------------------------------------------------- //
@@ -111,3 +114,6 @@ export const updateSettings = (patch) =>
   request('/api/settings', { method: 'PUT', body: patch })
 
 export const getStats = () => request('/api/stats')
+
+export const getCredits = ({ refresh = false } = {}) =>
+  request(`/api/credits${refresh ? '?refresh=1' : ''}`)
