@@ -83,6 +83,8 @@ export const getGlbUrl = (id) => `/api/models/${id}/glb`
 
 export const getInputImageUrl = (id) => `/api/models/${id}/input-image`
 
+export const getThumbUrl = (id) => `/api/models/${id}/thumb`
+
 export const validateModel = (id, action, reason = null) =>
   request(`/api/models/${id}/validate`, {
     method: 'PUT',
@@ -117,6 +119,9 @@ export const listTemplates = () => request('/api/templates')
 
 export const generateExport = (payload) =>
   request('/api/exports/generate', { method: 'POST', body: payload })
+
+export const patchExport = (id, patch) =>
+  request(`/api/exports/${id}`, { method: 'PATCH', body: patch })
 
 export const listExports = (modelId) =>
   request(`/api/exports?model_id=${modelId}`)

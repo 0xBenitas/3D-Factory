@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import PrintParams from './PrintParams.jsx'
+import { useToast } from './Toast.jsx'
 import {
   generateExport,
   getExportListingUrl,
   getExportZipUrl,
   listExports,
   listTemplates,
+  patchExport,
 } from '../api.js'
 
 // SPECS §4.6 — visible uniquement quand validation === 'approved'.
@@ -61,6 +63,10 @@ export default function ExportPanel({ model, onChanged }) {
   // pipeline_status → photos/packing (évite le "trou" de 3s où l'UI
   // affichait "Aucun export encore généré" avant le prochain poll).
   const [starting, setStarting] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(null)  // { title, description, tags, price_suggested }
+  const [savingEdit, setSavingEdit] = useState(false)
+  const toast = useToast()
 
   // Charge la liste des templates une fois au mount.
   useEffect(() => {
@@ -135,6 +141,51 @@ export default function ExportPanel({ model, onChanged }) {
     }
   }
 
+  const beginEdit = () => {
+    if (!latest) return
+    setDraft({
+      title: latest.title || '',
+      description: latest.description || '',
+      tags: (latest.tags || []).join(', '),
+      price_suggested: latest.price_suggested ?? 0,
+    })
+    setEditing(true)
+    setError(null)
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setDraft(null)
+  }
+
+  const saveEdit = async () => {
+    if (!latest || !draft) return
+    setSavingEdit(true)
+    setError(null)
+    try {
+      const patch = {
+        title: draft.title.trim(),
+        description: draft.description,
+        tags: draft.tags
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean),
+        price_suggested: Number(draft.price_suggested) || 0,
+      }
+      await patchExport(latest.id, patch)
+      toast('Listing mis à jour', { type: 'success' })
+      setEditing(false)
+      setDraft(null)
+      await reloadExports()
+    } catch (exc) {
+      const msg = exc.detail || exc.message || 'Sauvegarde échouée'
+      setError(msg)
+      toast(msg, { type: 'error' })
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   const handleCopyListing = async () => {
     if (!latest) return
     setError(null)
@@ -196,7 +247,7 @@ export default function ExportPanel({ model, onChanged }) {
         </div>
       )}
 
-      {!pipelineBusy && !starting && latest && (
+      {!pipelineBusy && !starting && latest && !editing && (
         <div className="export-panel__result">
           <div className="export-panel__title">
             <strong>{latest.title || `Export #${latest.id}`}</strong>
@@ -225,6 +276,9 @@ export default function ExportPanel({ model, onChanged }) {
           <PrintParams params={latest.print_params} />
 
           <div className="export-panel__actions">
+            <button className="btn" onClick={beginEdit} title="Éditer titre/desc/tags/prix sans appeler Claude (gratuit)">
+              ✏️ Éditer
+            </button>
             <button className="btn" onClick={handleCopyListing}>
               {copied ? '✓ Copié' : '📋 Copier listing'}
             </button>
@@ -239,9 +293,73 @@ export default function ExportPanel({ model, onChanged }) {
               className="btn"
               onClick={handleGenerate}
               disabled={busy || !template}
-              title="Relance photos + SEO + ZIP"
+              title="Relance photos + SEO + ZIP (coûte des crédits)"
             >
               🔄 Regénérer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!pipelineBusy && !starting && latest && editing && draft && (
+        <div className="export-panel__edit">
+          <div className="muted" style={{ fontSize: '0.82rem' }}>
+            ✏️ Édition manuelle — gratuit, pas d'appel Claude. Le ZIP sera
+            reconstruit avec les nouvelles valeurs.
+          </div>
+          <label>
+            <span>Titre</span>
+            <input
+              type="text"
+              value={draft.title}
+              maxLength={200}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              disabled={savingEdit}
+            />
+          </label>
+          <label>
+            <span>Description</span>
+            <textarea
+              rows={5}
+              value={draft.description}
+              maxLength={5000}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              disabled={savingEdit}
+            />
+          </label>
+          <label>
+            <span>Tags (séparés par virgule)</span>
+            <input
+              type="text"
+              value={draft.tags}
+              onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
+              disabled={savingEdit}
+              placeholder="3D print, STL, decor, minimalist"
+            />
+          </label>
+          <label>
+            <span>Prix suggéré (€)</span>
+            <input
+              type="number"
+              min="0"
+              max="10000"
+              step="0.01"
+              value={draft.price_suggested}
+              onChange={(e) => setDraft({ ...draft, price_suggested: e.target.value })}
+              disabled={savingEdit}
+              style={{ width: 120 }}
+            />
+          </label>
+          <div className="export-panel__actions">
+            <button
+              className="btn btn--primary"
+              onClick={saveEdit}
+              disabled={savingEdit || !draft.title.trim()}
+            >
+              {savingEdit ? 'Sauvegarde…' : '✓ Enregistrer'}
+            </button>
+            <button className="btn" onClick={cancelEdit} disabled={savingEdit}>
+              Annuler
             </button>
           </div>
         </div>

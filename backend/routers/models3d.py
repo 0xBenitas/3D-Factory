@@ -197,6 +197,37 @@ def get_glb(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
 # GET /api/models/{id}/input-image — photo source (si input_type="image")
 # --------------------------------------------------------------------------- #
 
+@router.get("/{model_id}/thumb")
+def get_thumb(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    """Miniature 256×256 PNG générée après REPAIR. 404 si pas encore dispo
+    (pipeline en cours ou modèle legacy d'avant l'ajout des thumbnails).
+
+    Le frontend affiche un placeholder sur erreur (pas d'erreur bruyante
+    côté UI) — c'est cohérent avec une grille où tous les modèles n'ont
+    pas forcément de thumb (ex: ceux en cours de génération).
+    """
+    import config as _config
+
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    thumb_path = _config.DATA_DIR / "models" / str(model_id) / "thumb.png"
+    if not thumb_path.is_file():
+        raise HTTPException(404, "Thumbnail not available yet")
+    # Chemin dérivé côté serveur, pas de BDD → le risque path traversal
+    # n'existe pas ici. On vérifie quand même qu'on est sous DATA_DIR par
+    # cohérence avec les autres endpoints fichiers.
+    try:
+        safe = resolve_under_data_dir(thumb_path)
+    except ValueError:
+        raise HTTPException(404, "Thumbnail path invalid")
+    return FileResponse(
+        safe,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/{model_id}/input-image")
 def get_input_image(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
     m = db.get(Model, model_id)

@@ -73,7 +73,23 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) return <section className="page"><div className="muted">Chargement…</div></section>
+  if (loading) {
+    return (
+      <section className="page settings-page">
+        <div className="page__header">
+          <h2>Settings</h2>
+        </div>
+        <div className="settings-grid">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="settings-card">
+              <div className="skeleton skeleton--line" style={{ width: '50%' }} />
+              <div className="skeleton skeleton--block" style={{ height: 40 }} />
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
   if (!settings) return <section className="page"><div className="error">Impossible de charger les settings.</div></section>
 
   return (
@@ -377,10 +393,41 @@ function PromptsSection() {
     return (
       <div className="stats-overview">
         <h3>Prompts système</h3>
-        <p className="muted">Chargement…</p>
+        <div className="skeleton skeleton--line" style={{ width: '60%' }} />
+        <div className="skeleton skeleton--block" style={{ height: 80 }} />
       </div>
     )
   }
+
+  // Regroupement par étape du pipeline. L'ordre des groupes suit la
+  // chronologie d'une génération : plus facile à retrouver mentalement
+  // que la liste plate.
+  const GROUPS = [
+    {
+      key: 'step1',
+      title: 'Étape 1 — Optimisation du prompt',
+      hint: 'Transforme l\'input utilisateur en prompt 3D imprimable pour le moteur.',
+      ids: ['prompt_optimizer_text', 'prompt_optimizer_image'],
+    },
+    {
+      key: 'step4',
+      title: 'Étape 4 — Scoring qualité',
+      hint: 'Évalue le mesh réparé à partir des métriques brutes. Informatif, pas de rejet auto.',
+      ids: ['quality_scorer'],
+    },
+    {
+      key: 'step7',
+      title: 'Étape 7 — Export marketplace',
+      hint: 'Post-validation : titre/desc/tags/prix, paramètres d\'impression, prompt photo lifestyle.',
+      ids: ['seo_listing', 'seo_print_params', 'seo_lifestyle'],
+    },
+  ]
+  const byId = Object.fromEntries(bricks.map((b) => [b.id, b]))
+  // Toute brique non classée tombe dans un groupe "Autres" (robuste si on
+  // ajoute une brique sans mettre à jour GROUPS).
+  const orphanBricks = bricks.filter(
+    (b) => !GROUPS.some((g) => g.ids.includes(b.id)),
+  )
 
   return (
     <div className="stats-overview">
@@ -390,18 +437,49 @@ function PromptsSection() {
         Les modifications sont prises en compte immédiatement, sans redémarrer.
       </p>
       {error && <div className="error">{error}</div>}
-      <div className="prompts-list" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {bricks.map((b) => (
-          <PromptBrickRow
-            key={b.id}
-            brick={b}
-            maxLength={maxLength}
-            open={openId === b.id}
-            onToggle={() => setOpenId(openId === b.id ? null : b.id)}
-            onUpdate={onBrickUpdate}
-            onError={setError}
-          />
+
+      <div className="prompts-groups">
+        {GROUPS.map((g) => (
+          <div key={g.key} className="prompt-group">
+            <div className="prompt-group__header">
+              <h4 className="prompt-group__title">{g.title}</h4>
+              <p className="prompt-group__hint muted">{g.hint}</p>
+            </div>
+            <div className="prompts-list">
+              {g.ids.map((id) => byId[id]).filter(Boolean).map((b) => (
+                <PromptBrickRow
+                  key={b.id}
+                  brick={b}
+                  maxLength={maxLength}
+                  open={openId === b.id}
+                  onToggle={() => setOpenId(openId === b.id ? null : b.id)}
+                  onUpdate={onBrickUpdate}
+                  onError={setError}
+                />
+              ))}
+            </div>
+          </div>
         ))}
+        {orphanBricks.length > 0 && (
+          <div className="prompt-group">
+            <div className="prompt-group__header">
+              <h4 className="prompt-group__title">Autres</h4>
+            </div>
+            <div className="prompts-list">
+              {orphanBricks.map((b) => (
+                <PromptBrickRow
+                  key={b.id}
+                  brick={b}
+                  maxLength={maxLength}
+                  open={openId === b.id}
+                  onToggle={() => setOpenId(openId === b.id ? null : b.id)}
+                  onUpdate={onBrickUpdate}
+                  onError={setError}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

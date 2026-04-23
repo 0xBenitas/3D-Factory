@@ -18,10 +18,12 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+import config
 from app_settings import check_budget_or_raise
 from config import resolve_under_data_dir
 from database import get_db
 from models import Export, Model
+from services import packager
 from tasks import run_export_guarded
 from templates import get_template
 
@@ -55,6 +57,17 @@ class ExportDetail(BaseModel):
     print_params: dict[str, Any]
     zip_path: str | None
     created_at: str
+
+
+class ExportPatchRequest(BaseModel):
+    """Édition manuelle du listing (sans réappel Claude). Tous les champs
+    sont optionnels — on n'update que ceux fournis. Le ZIP est reconstruit
+    avec le template courant si au moins un champ change."""
+
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    tags: list[str] | None = Field(default=None, max_length=50)
+    price_suggested: float | None = Field(default=None, ge=0.0, le=10000.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,6 +173,90 @@ def get_export(export_id: int, db: Session = Depends(get_db)) -> ExportDetail:
     ex = db.get(Export, export_id)
     if ex is None:
         raise HTTPException(404, f"Export {export_id} not found")
+    return _to_detail(ex)
+
+
+@router.patch("/{export_id}", response_model=ExportDetail)
+def patch_export(
+    export_id: int,
+    payload: ExportPatchRequest,
+    db: Session = Depends(get_db),
+) -> ExportDetail:
+    """Édition manuelle du listing (title/desc/tags/price) sans réappel
+    Claude. Reconstruit le ZIP avec le template courant si le modèle a
+    toujours son STL. Sinon on update uniquement les champs texte.
+
+    Intentionnellement PAS de `check_budget_or_raise` : cette édition est
+    gratuite (pas d'appel API externe), c'est justement tout l'intérêt
+    — tweaker un mot sans cramer 0.10€ de régénération.
+    """
+    ex = db.get(Export, export_id)
+    if ex is None:
+        raise HTTPException(404, f"Export {export_id} not found")
+
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(400, "No fields to update")
+
+    if "title" in updates:
+        ex.title = updates["title"].strip() or ex.title
+    if "description" in updates:
+        ex.description = updates["description"]
+    if "tags" in updates:
+        ex.tags = [str(t).strip() for t in updates["tags"] if str(t).strip()]
+    if "price_suggested" in updates:
+        ex.price_suggested = round(float(updates["price_suggested"]), 2)
+
+    # Regénération du ZIP si le STL est encore là. Best-effort : si on ne
+    # peut pas reconstruire (STL supprimé, disque plein), on commit quand
+    # même les changements texte — l'utilisateur peut toujours copier le
+    # listing via /listing qui lit les nouveaux champs BDD.
+    try:
+        template = get_template(ex.template)
+    except KeyError:
+        raise HTTPException(
+            500,
+            f"Template '{ex.template}' no longer available in registry",
+        )
+
+    zip_rebuilt = False
+    model = db.get(Model, ex.model_id)
+    if model and model.stl_path:
+        try:
+            stl_safe = resolve_under_data_dir(model.stl_path)
+            if stl_safe.is_file():
+                seo = {
+                    "title": ex.title,
+                    "description": ex.description,
+                    "tags": list(ex.tags or []),
+                    "price_eur": float(ex.price_suggested or 0.0),
+                }
+                listing_text = template.format_listing(
+                    seo, dict(ex.print_params or {}),
+                )
+                photo_paths = list(model.photo_paths or [])
+                exports_dir = config.DATA_DIR / "exports"
+                new_zip = packager.build_zip(
+                    ex.model_id,
+                    str(stl_safe),
+                    photo_paths,
+                    listing_text,
+                    ex.title,
+                    str(exports_dir),
+                )
+                ex.zip_path = new_zip
+                zip_rebuilt = True
+        except (ValueError, packager.PackagerError, OSError) as exc:
+            logger.warning(
+                "Export #%d: fields updated but ZIP rebuild skipped: %s",
+                export_id, exc,
+            )
+
+    db.commit()
+    logger.info(
+        "Export #%d patched (fields=%s, zip_rebuilt=%s)",
+        export_id, sorted(updates.keys()), zip_rebuilt,
+    )
     return _to_detail(ex)
 
 

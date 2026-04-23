@@ -95,6 +95,60 @@ def generate_screenshots(
     return paths
 
 
+def generate_thumbnail(
+    glb_path: str,
+    output_path: str,
+    size: int = 256,
+) -> str:
+    """Génère un unique thumbnail carré (angle 3/4) pour la grille Models.
+
+    ~500ms sur CPU. Utilisé par le pipeline au post-repair pour que chaque
+    modèle ait une miniature dispo dès l'étape "pending" (avant même
+    l'export qui génère les 4 angles).
+    """
+    try:
+        import pyrender  # type: ignore
+        from PIL import Image  # type: ignore
+    except ImportError as exc:
+        raise ScreenshotError(
+            f"pyrender/Pillow not installed (or PYOPENGL_PLATFORM unset): {exc}"
+        ) from exc
+
+    glb = Path(glb_path)
+    if not glb.is_file():
+        raise ScreenshotError(f"GLB missing: {glb_path}")
+
+    scene_trimesh = trimesh.load(str(glb))
+    if not isinstance(scene_trimesh, trimesh.Scene):
+        scene_trimesh = trimesh.Scene(scene_trimesh)
+    meshes = scene_trimesh.dump()
+    if not meshes:
+        raise ScreenshotError("GLB contient aucune géométrie")
+
+    bounds = scene_trimesh.bounds
+    center = (bounds[0] + bounds[1]) / 2.0
+    scale = float(np.max(bounds[1] - bounds[0]))
+    distance = scale * 2.0
+    # Angle 3/4 : même repère visuel que la 2e tuile des 4 screenshots —
+    # familier pour l'utilisateur entre grille et détail.
+    eye = np.array(
+        [distance * 0.7, -distance * 0.7, center[2] + scale * 0.3]
+    )
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # _render_one attend un répertoire + un `name` → on découpe le path.
+    tmp_path = _render_one(
+        pyrender, Image, meshes, center, eye, size,
+        out.parent, out.stem,
+    )
+    # _render_one écrit "<name>.png" dans le dir ; renomme si nécessaire.
+    if tmp_path != str(out):
+        Path(tmp_path).replace(out)
+    logger.info("Thumbnail → %s", out)
+    return str(out)
+
+
 # --------------------------------------------------------------------------- #
 # Helpers internes
 # --------------------------------------------------------------------------- #

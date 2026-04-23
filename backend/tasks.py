@@ -404,6 +404,17 @@ async def _run_repair_and_score(
         repair_log=repair_log_raw[:2000],
     )
 
+    # Thumbnail (~500ms CPU) — non-bloquant : si pyrender plante on
+    # continue, la grille affiche juste le placeholder. Chemin
+    # déterministe pour ne pas alourdir le schéma DB.
+    try:
+        thumb_path = str(model_dir / "thumb.png")
+        await asyncio.to_thread(
+            screenshot.generate_thumbnail, glb_path, thumb_path, 256,
+        )
+    except Exception as exc:
+        logger.warning("Pipeline #%d: thumbnail skipped: %s", model_id, exc)
+
     _update_model(model_id, pipeline_status="scoring")
     try:
         score_result = await quality_scorer.score_mesh(

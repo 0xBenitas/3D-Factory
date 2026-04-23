@@ -33,6 +33,7 @@ export default function ModelsPage() {
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [sort, setSort] = useState('date_desc')
+  const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [detail, setDetail] = useState(null)
   const [detailError, setDetailError] = useState(null)
@@ -93,6 +94,23 @@ export default function ModelsPage() {
     reloadDetail()
   }, [reloadDetail])
 
+  // Filtre client-side sur le texte d'entrée utilisateur. Le backend ne
+  // retourne pas `optimized_prompt` dans la liste (seulement dans le détail),
+  // donc la recherche porte sur input_text. Cas-insensible, trim des
+  // espaces, no-op si recherche vide.
+  const filteredModels = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return models
+    return models.filter((m) => {
+      const hay = [
+        m.input_text || '',
+        m.engine || '',
+        String(m.id),
+      ].join(' ').toLowerCase()
+      return hay.includes(q)
+    })
+  }, [models, search])
+
   // Auto-poll : si un modèle tourne actuellement (dans la liste ou le
   // détail), on recharge toutes les 3s. Sinon on s'arrête.
   const anyRunning = useMemo(
@@ -115,6 +133,68 @@ export default function ModelsPage() {
     // Appelé après approve/regen/remesh/reject.
     await Promise.all([reloadList(), reloadDetail()])
   }
+
+  // Keyboard shortcuts : j/k pour naviguer, a approuver, r rejeter,
+  // e regen, / pour focus la recherche, ? pour afficher l'aide.
+  // Désactivés si un input/textarea a le focus (sauf "/" qui y échappe).
+  const [shortcutsHelp, setShortcutsHelp] = useState(false)
+  const searchRef = useRef(null)
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase()
+      const inField = tag === 'input' || tag === 'textarea' || e.target?.isContentEditable
+      // "/" ouvre la recherche quelle que soit la position (sauf si déjà dans un input).
+      if (e.key === '/' && !inField) {
+        e.preventDefault()
+        searchRef.current?.focus()
+        return
+      }
+      if (e.key === 'Escape') {
+        if (shortcutsHelp) setShortcutsHelp(false)
+        if (tag === 'input' || tag === 'textarea') e.target.blur()
+        return
+      }
+      if (inField) return  // tous les autres shortcuts s'arrêtent ici
+
+      // Navigation dans la liste filtrée (triée côté backend).
+      if (e.key === 'j' || e.key === 'k') {
+        e.preventDefault()
+        if (filteredModels.length === 0) return
+        const idx = filteredModels.findIndex((m) => m.id === selectedId)
+        const next = e.key === 'j'
+          ? Math.min(idx + 1, filteredModels.length - 1)
+          : Math.max(idx - 1, 0)
+        const target = idx === -1
+          ? filteredModels[0]
+          : filteredModels[next] || filteredModels[idx]
+        if (target) setSelectedId(target.id)
+        return
+      }
+      if (e.key === '?') {
+        e.preventDefault()
+        setShortcutsHelp((v) => !v)
+        return
+      }
+      // Actions sur le modèle sélectionné.
+      if (!detail) return
+      if (e.key === 'a') {
+        e.preventDefault()
+        document.querySelector('.model-actions .btn--success')?.click()
+      } else if (e.key === 'r') {
+        // Toggle le panneau de rejet (évite les rejets non-confirmés).
+        e.preventDefault()
+        const rejectBtn = document.querySelector('.model-actions__buttons .btn--danger')
+        rejectBtn?.click()
+      } else if (e.key === 'e') {
+        e.preventDefault()
+        const regenBtn = document.querySelectorAll('.model-actions__buttons .btn')[1]
+        regenBtn?.click()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [filteredModels, selectedId, detail, shortcutsHelp])
 
   return (
     <section className="page models-page">
@@ -143,18 +223,60 @@ export default function ModelsPage() {
               </option>
             ))}
           </select>
+          <input
+            ref={searchRef}
+            type="search"
+            className="models-page__search"
+            placeholder="Rechercher… (ou /)"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Rechercher dans les modèles"
+          />
+          <button
+            type="button"
+            className="btn btn--chip"
+            onClick={() => setShortcutsHelp((v) => !v)}
+            aria-label="Aide raccourcis clavier"
+            title="Raccourcis clavier (?)"
+          >
+            ⌨
+          </button>
         </div>
       </div>
+
+      {shortcutsHelp && (
+        <div className="shortcuts-help">
+          <strong>Raccourcis clavier</strong>
+          <div className="shortcuts-help__grid">
+            <span><kbd>j</kbd> / <kbd>k</kbd></span><span>Naviguer dans la liste</span>
+            <span><kbd>/</kbd></span>            <span>Focus recherche</span>
+            <span><kbd>a</kbd></span>            <span>Approuver le modèle sélectionné</span>
+            <span><kbd>e</kbd></span>            <span>Ouvrir le panneau Regénérer</span>
+            <span><kbd>r</kbd></span>            <span>Ouvrir le panneau Rejeter</span>
+            <span><kbd>Esc</kbd></span>          <span>Quitter la recherche / fermer l'aide</span>
+            <span><kbd>?</kbd></span>            <span>Afficher / masquer cette aide</span>
+          </div>
+        </div>
+      )}
 
       {error && <div className="error">Erreur : {error}</div>}
 
       <div className="models-page__layout">
         <div className="models-page__grid">
-          {loading && <div className="muted">Chargement…</div>}
+          {loading && (
+            <>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={`sk-${i}`} className="skeleton skeleton--card" />
+              ))}
+            </>
+          )}
           {!loading && models.length === 0 && (
             <div className="muted">Aucun modèle — va en faire un dans Create.</div>
           )}
-          {models.map((m) => (
+          {!loading && models.length > 0 && filteredModels.length === 0 && (
+            <div className="muted">Aucun résultat pour « {search.trim()} ».</div>
+          )}
+          {!loading && filteredModels.map((m) => (
             <ModelCard
               key={m.id}
               model={m}
