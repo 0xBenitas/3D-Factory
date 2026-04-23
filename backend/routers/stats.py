@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+import costs
 from app_settings import get_float_setting
 from database import get_db
 from models import Model
@@ -42,6 +43,9 @@ class StatsView(BaseModel):
     avg_score: float | None
     max_daily_budget_eur: float
     budget_exceeded: bool
+    # True si `max_daily_budget_eur <= 0` → plafond journalier désactivé,
+    # aucune limite sur les appels API payants. L'UI affiche un bandeau.
+    budget_disabled: bool
 
 
 # --------------------------------------------------------------------------- #
@@ -95,6 +99,7 @@ def get_stats(db: Session = Depends(get_db)) -> StatsView:
 
     budget = get_float_setting(db, "max_daily_budget_eur", 2.0)
 
+    budget_disabled = budget <= 0
     return StatsView(
         today_cost_eur=round(today_cost, 4),
         today_count=today_count,
@@ -107,5 +112,55 @@ def get_stats(db: Session = Depends(get_db)) -> StatsView:
         approval_rate=round(approval_rate, 3) if approval_rate is not None else None,
         avg_score=round(avg_score, 2) if avg_score is not None else None,
         max_daily_budget_eur=budget,
-        budget_exceeded=today_cost >= budget,
+        # `budget_exceeded` reste false tant que la garde est désactivée :
+        # sans plafond, le concept "dépassé" n'a pas de sens.
+        budget_exceeded=(not budget_disabled) and today_cost >= budget,
+        budget_disabled=budget_disabled,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Cost hints — source de vérité pour les estimations affichées dans l'UI
+# (au lieu de valeurs hardcodées dans InputForm qui divergent au premier
+# changement de pricing côté providers).
+# --------------------------------------------------------------------------- #
+
+class CostHintsView(BaseModel):
+    generation_eur: float
+    export_eur: float
+    # Détail pour tooltip / debugging — pas requis par l'UI mais peu cher.
+    breakdown: dict[str, float]
+
+
+@router.get("/costs/hints", response_model=CostHintsView)
+def get_cost_hints() -> CostHintsView:
+    """Estimation des coûts par étape du pipeline (EUR).
+
+    Basé sur `backend/costs.py` — le moteur de référence est Meshy (préview
+    5 crédits). Les autres moteurs tombent sur le même ordre de grandeur.
+    3 photos lifestyle par export (cohérent avec tasks.py).
+    """
+    gen_total = (
+        costs.PROMPT_OPTIMIZE_EUR
+        + costs.engine_generate_eur("meshy")
+        + costs.SCORING_EUR
+    )
+    export_total = (
+        costs.LIFESTYLE_PROMPT_EUR
+        + costs.STABILITY_PER_IMAGE_EUR * 3
+        + costs.LISTING_EUR
+        + costs.PRINT_PARAMS_EUR
+    )
+    return CostHintsView(
+        generation_eur=round(gen_total, 4),
+        export_eur=round(export_total, 4),
+        breakdown={
+            "prompt_optimize": costs.PROMPT_OPTIMIZE_EUR,
+            "engine_generate": costs.engine_generate_eur("meshy"),
+            "scoring": costs.SCORING_EUR,
+            "lifestyle_prompt": costs.LIFESTYLE_PROMPT_EUR,
+            "stability_per_image": costs.STABILITY_PER_IMAGE_EUR,
+            "listing": costs.LISTING_EUR,
+            "print_params": costs.PRINT_PARAMS_EUR,
+        },
     )

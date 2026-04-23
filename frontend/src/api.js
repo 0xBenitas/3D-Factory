@@ -11,12 +11,36 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body = null, headers = {} } = {}) {
+// Extrait un message lisible du champ `detail` de FastAPI qui peut prendre
+// trois formes :
+//  - string                → HTTPException(detail="...")
+//  - [{msg, loc, type}, …] → erreur de validation Pydantic
+//  - {msg|message, …}      → exception custom sérialisée en dict
+// On renvoie null si rien d'utilisable pour qu'on puisse retomber sur
+// `resp.statusText`.
+function extractDetail(payload) {
+  if (!payload) return null
+  const d = payload.detail
+  if (d == null) return null
+  if (typeof d === 'string') return d
+  if (Array.isArray(d)) {
+    const first = d[0]
+    if (!first) return null
+    return first.msg || first.message || JSON.stringify(first)
+  }
+  if (typeof d === 'object') {
+    return d.msg || d.message || JSON.stringify(d)
+  }
+  return String(d)
+}
+
+async function request(path, { method = 'GET', body = null, headers = {}, signal = null } = {}) {
   const opts = {
     method,
     credentials: 'same-origin',
     headers: { ...headers },
   }
+  if (signal) opts.signal = signal
   if (body !== null && body !== undefined) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
@@ -25,10 +49,7 @@ async function request(path, { method = 'GET', body = null, headers = {} } = {})
   const isJson = (resp.headers.get('content-type') || '').includes('application/json')
   const payload = isJson ? await resp.json().catch(() => null) : null
   if (!resp.ok) {
-    const detail =
-      (payload && (payload.detail?.[0]?.msg || payload.detail)) ||
-      resp.statusText ||
-      'Request failed'
+    const detail = extractDetail(payload) || resp.statusText || 'Request failed'
     throw new ApiError(resp.status, detail, payload)
   }
   return payload
@@ -41,8 +62,8 @@ async function request(path, { method = 'GET', body = null, headers = {} } = {})
 export const startPipeline = (payload) =>
   request('/api/pipeline/run', { method: 'POST', body: payload })
 
-export const getPipelineStatus = (modelId) =>
-  request(`/api/pipeline/status/${modelId}`)
+export const getPipelineStatus = (modelId, { signal } = {}) =>
+  request(`/api/pipeline/status/${modelId}`, { signal })
 
 export const cancelPipeline = (modelId) =>
   request(`/api/pipeline/${modelId}/cancel`, { method: 'POST' })
@@ -51,12 +72,12 @@ export const cancelPipeline = (modelId) =>
 // Models
 // ---------------------------------------------------------------------- //
 
-export const listModels = ({ validation = 'all', sort = 'date_desc' } = {}) => {
+export const listModels = ({ validation = 'all', sort = 'date_desc', signal = null } = {}) => {
   const qs = new URLSearchParams({ validation, sort }).toString()
-  return request(`/api/models?${qs}`)
+  return request(`/api/models?${qs}`, { signal })
 }
 
-export const getModel = (id) => request(`/api/models/${id}`)
+export const getModel = (id, { signal } = {}) => request(`/api/models/${id}`, { signal })
 
 export const getGlbUrl = (id) => `/api/models/${id}/glb`
 
@@ -114,6 +135,8 @@ export const updateSettings = (patch) =>
   request('/api/settings', { method: 'PUT', body: patch })
 
 export const getStats = () => request('/api/stats')
+
+export const getCostHints = () => request('/api/costs/hints')
 
 export const getCredits = ({ refresh = false } = {}) =>
   request(`/api/credits${refresh ? '?refresh=1' : ''}`)

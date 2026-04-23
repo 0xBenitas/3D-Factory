@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ErrorBoundary from '../components/ErrorBoundary.jsx'
 import ExportPanel from '../components/ExportPanel.jsx'
 import ModelActions from '../components/ModelActions.jsx'
 import ModelCard from '../components/ModelCard.jsx'
@@ -36,29 +37,53 @@ export default function ModelsPage() {
   const [detail, setDetail] = useState(null)
   const [detailError, setDetailError] = useState(null)
 
+  // Tracke les fetch en vol pour pouvoir les abort sur unmount / changement
+  // de paramètres : sans ça, une navigation pendant un fetch lent produit
+  // des setState sur composant démonté (warnings React + UI incohérente).
+  const inflightRef = useRef(new Set())
+
   const reloadList = useCallback(async () => {
+    const abort = new AbortController()
+    inflightRef.current.add(abort)
     try {
-      const list = await listModels({ validation: filter, sort })
+      const list = await listModels({ validation: filter, sort, signal: abort.signal })
       setModels(list)
       setError(null)
     } catch (exc) {
+      if (exc?.name === 'AbortError') return
       setError(exc.detail || exc.message)
     } finally {
+      inflightRef.current.delete(abort)
       setLoading(false)
     }
   }, [filter, sort])
 
   const reloadDetail = useCallback(async () => {
     if (selectedId == null) return
+    const abort = new AbortController()
+    inflightRef.current.add(abort)
     try {
-      const d = await getModel(selectedId)
+      const d = await getModel(selectedId, { signal: abort.signal })
       setDetail(d)
       setDetailError(null)
     } catch (exc) {
+      if (exc?.name === 'AbortError') return
       setDetailError(exc.detail || exc.message)
       setDetail(null)
+    } finally {
+      inflightRef.current.delete(abort)
     }
   }, [selectedId])
+
+  // Au unmount ou quand on change de filtre/tri/selectedId, on abort toutes
+  // les requêtes encore en vol — les anciennes deviennent inutiles dès qu'un
+  // nouveau fetch part.
+  useEffect(() => {
+    return () => {
+      for (const a of inflightRef.current) a.abort()
+      inflightRef.current.clear()
+    }
+  }, [])
 
   useEffect(() => {
     reloadList()
@@ -107,7 +132,11 @@ export default function ModelsPage() {
               </button>
             ))}
           </div>
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            aria-label="Trier les modèles"
+          >
             {SORTS.map((s) => (
               <option key={s.key} value={s.key}>
                 {s.label}
@@ -155,7 +184,28 @@ export default function ModelsPage() {
               </div>
 
               {detail.glb_path ? (
-                <ModelViewer glbUrl={getGlbUrl(detail.id)} />
+                <ErrorBoundary
+                  fallback={(err, reset) => (
+                    <div className="model-viewer model-viewer--empty" style={{ height: 400 }}>
+                      <div className="muted" style={{ textAlign: 'center' }}>
+                        Impossible d'afficher le modèle
+                        <div style={{ fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                          {String(err?.message || err)}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ marginTop: '0.6rem' }}
+                          onClick={reset}
+                        >
+                          Réessayer
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                >
+                  <ModelViewer glbUrl={getGlbUrl(detail.id)} />
+                </ErrorBoundary>
               ) : (
                 <div className="model-viewer model-viewer--empty">
                   <span className="muted">

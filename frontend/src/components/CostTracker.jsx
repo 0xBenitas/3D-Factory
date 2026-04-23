@@ -42,8 +42,14 @@ export default function CostTracker({ boost = false, onStats = null }) {
   if (error) return <div className="cost-tracker cost-tracker--error">💰 {error}</div>
   if (!stats) return null
 
-  const { today_cost_eur, max_daily_budget_eur, today_count, budget_exceeded } = stats
-  const budgetEnabled = max_daily_budget_eur > 0
+  const {
+    today_cost_eur,
+    max_daily_budget_eur,
+    today_count,
+    budget_exceeded,
+    budget_disabled,
+  } = stats
+  const budgetEnabled = !budget_disabled && max_daily_budget_eur > 0
   const pct = budgetEnabled
     ? Math.min(100, (today_cost_eur / max_daily_budget_eur) * 100)
     : 0
@@ -67,6 +73,12 @@ export default function CostTracker({ boost = false, onStats = null }) {
       <div className={`bar ${pctClass}`}>
         <div className="bar__fill" style={{ width: `${pct}%` }} />
       </div>
+      {budget_disabled && (
+        <div className="cost-tracker__warn">
+          ⚠️ Plafond journalier désactivé (max_daily_budget_eur ≤ 0). Définis une valeur
+          positive dans Settings pour limiter les dépenses API.
+        </div>
+      )}
       {budget_exceeded && (
         <div className="cost-tracker__warn">
           Budget dépassé — le pipeline refuse toute nouvelle requête jusqu'à demain.

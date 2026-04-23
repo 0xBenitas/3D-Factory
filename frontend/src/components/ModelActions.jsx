@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useToast } from './Toast.jsx'
 import { regenerateModel, remeshModel, validateModel } from '../api.js'
 
 // SPECS §4.5 : approuver / regénérer / remesh / rejeter.
@@ -10,6 +11,19 @@ export default function ModelActions({ model, onChanged }) {
   const [prompt, setPrompt] = useState(model.optimized_prompt || '')
   const [polycount, setPolycount] = useState(30000)
   const [reason, setReason] = useState('')
+  const toast = useToast()
+
+  // Resynchronise le formulaire quand on navigue vers un autre modèle ou
+  // quand le modèle courant est rafraîchi après une regénération :
+  // `useState(...)` ne capture la valeur qu'au premier render, donc sans ça
+  // le champ resterait figé sur l'ancien prompt. Le panel et l'erreur sont
+  // aussi réinitialisés pour éviter d'afficher un état périmé du précédent.
+  useEffect(() => {
+    setPrompt(model.optimized_prompt || '')
+    setPanel(null)
+    setError(null)
+    setReason('')
+  }, [model.id, model.optimized_prompt])
 
   const disabled =
     busy ||
@@ -17,31 +31,46 @@ export default function ModelActions({ model, onChanged }) {
       model.pipeline_status,
     )
 
-  const wrap = async (fn) => {
+  const wrap = async (fn, successMsg) => {
     setBusy(true)
     setError(null)
     try {
       await fn()
       setPanel(null)
+      if (successMsg) toast(successMsg, { type: 'success' })
       onChanged?.()
     } catch (exc) {
-      setError(exc.detail || exc.message)
+      const msg = exc.detail || exc.message
+      setError(msg)
+      toast(msg || 'Action échouée', { type: 'error' })
     } finally {
       setBusy(false)
     }
   }
 
   const approve = () =>
-    wrap(() => validateModel(model.id, 'approve'))
+    wrap(
+      () => validateModel(model.id, 'approve'),
+      `Modèle #${model.id} approuvé`,
+    )
 
   const reject = () =>
-    wrap(() => validateModel(model.id, 'reject', reason || null))
+    wrap(
+      () => validateModel(model.id, 'reject', reason || null),
+      `Modèle #${model.id} rejeté`,
+    )
 
   const regenerate = () =>
-    wrap(() => regenerateModel(model.id, prompt || null))
+    wrap(
+      () => regenerateModel(model.id, prompt || null),
+      `Regénération #${model.id} lancée`,
+    )
 
   const remesh = () =>
-    wrap(() => remeshModel(model.id, polycount))
+    wrap(
+      () => remeshModel(model.id, polycount),
+      `Remesh #${model.id} lancé (${polycount.toLocaleString('fr')} faces)`,
+    )
 
   return (
     <div className="model-actions">

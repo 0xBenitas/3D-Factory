@@ -19,6 +19,36 @@ const RUNNING_STATUSES = new Set(['photos', 'packing'])
 // Au-delà, on retire l'état "démarrage" pour ne pas bloquer l'UI.
 const START_WATCHDOG_MS = 15000
 
+// Copie dans le presse-papier avec fallback : `navigator.clipboard` n'est
+// dispo qu'en contexte sécurisé (HTTPS ou localhost). En HTTP ou dans un
+// iframe sandboxée on tombe sur une textarea temporaire + execCommand, qui
+// marche partout même si officiellement déprécié.
+async function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // permissions / contexte non sécurisé → fallback
+    }
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.style.position = 'fixed'
+  ta.style.top = '0'
+  ta.style.left = '0'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  try {
+    const ok = document.execCommand('copy')
+    if (!ok) throw new Error('execCommand copy refusé')
+  } finally {
+    document.body.removeChild(ta)
+  }
+}
+
 export default function ExportPanel({ model, onChanged }) {
   const [templates, setTemplates] = useState([])
   const [template, setTemplate] = useState('')
@@ -115,8 +145,15 @@ export default function ExportPanel({ model, onChanged }) {
       if (!resp.ok) {
         throw new Error(`${resp.status} ${resp.statusText}`)
       }
+      // Le backend doit renvoyer du text/plain ; si un middleware ou un
+      // proxy a substitué du JSON/HTML, on refuse plutôt que de coller
+      // du contenu inattendu dans le presse-papier de l'utilisateur.
+      const ctype = (resp.headers.get('content-type') || '').toLowerCase()
+      if (!ctype.startsWith('text/plain')) {
+        throw new Error(`Réponse inattendue du serveur (content-type: ${ctype || 'vide'})`)
+      }
       const text = await resp.text()
-      await navigator.clipboard.writeText(text)
+      await copyToClipboard(text)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (exc) {

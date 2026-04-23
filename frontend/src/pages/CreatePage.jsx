@@ -3,6 +3,7 @@ import CostTracker from '../components/CostTracker.jsx'
 import CreditsBar from '../components/CreditsBar.jsx'
 import InputForm from '../components/InputForm.jsx'
 import PipelineTracker from '../components/PipelineTracker.jsx'
+import { useToast } from '../components/Toast.jsx'
 import { startPipeline } from '../api.js'
 
 // SPECS §"Frontend — 3 pages / CreatePage".
@@ -13,12 +14,17 @@ export default function CreatePage() {
   const [currentId, setCurrentId] = useState(null)
   const [busy, setBusy] = useState(false)
   const [budgetInfo, setBudgetInfo] = useState(null)
+  const toast = useToast()
 
   const handleSubmit = async (payload) => {
     setBusy(true)
     try {
       const res = await startPipeline(payload)
       setCurrentId(res.model_id)
+      toast(`Pipeline #${res.model_id} lancé`, { type: 'success' })
+    } catch (exc) {
+      toast(exc.detail || exc.message || 'Échec du lancement', { type: 'error' })
+      throw exc
     } finally {
       setBusy(false)
     }

@@ -16,6 +16,12 @@ const STEPS = [
 
 const TERMINAL_STATUSES = new Set(['pending', 'done', 'failed', 'cancelled'])
 
+// Garde-fou de polling. Le pipeline prend typiquement 1-3 min, mais un
+// blocage côté moteur (Meshy bloqué, timeout serveur) laisse un statut
+// non-terminal. Sans cap, un onglet oublié repoll toutes les 3s à vie.
+const MAX_POLL_DURATION_MS = 15 * 60 * 1000  // 15 min
+const MAX_CONSECUTIVE_ERRORS = 5
+
 function stepState(currentStatus, stepKey) {
   if (currentStatus === 'failed' || currentStatus === 'cancelled') {
     const thisIdx = STEPS.findIndex((s) => s.key === stepKey)
@@ -74,18 +80,55 @@ export default function PipelineTracker({ modelId }) {
   }
 
   useEffect(() => {
+    // Reset des refs à chaque changement de modèle : sans ça les durées et
+    // chronos du modèle précédent fuitent dans l'affichage du nouveau.
+    stageDurations.current = {}
+    currentStage.current = null
+    currentStageStart.current = Date.now()
+    startRef.current = Date.now()
+    setStatus(null)
+    setError(null)
+    setElapsed(0)
+
+    const abort = new AbortController()
     let cancelled = false
+    let consecutiveErrors = 0
+    let timeoutId = null
+    const started = Date.now()
 
     async function poll() {
+      // Cap global : abandonne si le pipeline n'est jamais terminal.
+      if (Date.now() - started > MAX_POLL_DURATION_MS) {
+        if (!cancelled) {
+          setError(
+            'Timeout : le pipeline n\'a pas terminé après 15 min. ' +
+            'Le polling est stoppé — rafraîchis la page pour réessayer.',
+          )
+        }
+        return
+      }
       try {
-        const s = await getPipelineStatus(modelId)
+        const s = await getPipelineStatus(modelId, { signal: abort.signal })
         if (cancelled) return
+        consecutiveErrors = 0
         trackStage(s.pipeline_status)
         setStatus(s)
+        setError(null)
         if (TERMINAL_STATUSES.has(s.pipeline_status)) return
-        setTimeout(poll, 3000)
+        timeoutId = setTimeout(poll, 3000)
       } catch (exc) {
-        if (!cancelled) setError(exc.detail || exc.message)
+        if (cancelled || exc?.name === 'AbortError') return
+        consecutiveErrors += 1
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          setError(
+            `Connexion perdue (${exc.detail || exc.message}). ` +
+            'Rafraîchis la page pour reprendre le suivi.',
+          )
+          return
+        }
+        // Backoff exponentiel borné pour laisser le serveur respirer.
+        const delay = Math.min(3000 * 2 ** (consecutiveErrors - 1), 30000)
+        timeoutId = setTimeout(poll, delay)
       }
     }
     poll()
@@ -96,6 +139,8 @@ export default function PipelineTracker({ modelId }) {
 
     return () => {
       cancelled = true
+      abort.abort()
+      if (timeoutId) clearTimeout(timeoutId)
       clearInterval(tick)
     }
   }, [modelId])
