@@ -98,6 +98,8 @@ def get_api_key(name: str) -> str:
     puis variable d'environnement. Permet de configurer/mettre à jour les clés
     via l'UI sans redémarrer.
     """
+    import logging
+
     key = name.lower()
     env_var = _API_KEY_ENV_MAP.get(key)
     if env_var is None:
@@ -110,8 +112,13 @@ def get_api_key(name: str) -> str:
             row = db.get(Setting, f"api_key_{key}")
             if row and row.value:
                 return str(row.value)
-    except Exception:
-        pass
+    except Exception as exc:
+        # On retombe sur .env pour ne pas casser le runtime, mais l'erreur
+        # BDD est probablement le signal d'un problème plus large : log.
+        logging.getLogger(__name__).warning(
+            "get_api_key(%s): DB lookup failed, falling back to env (%s)",
+            key, exc,
+        )
     return os.environ.get(env_var, "")
 
 # Défauts métier
@@ -133,3 +140,28 @@ DATA_DIR: Path = _resolve_data_dir(_get("DATA_DIR", "./data"))
 # Chemins dérivés
 DB_PATH: Path = DATA_DIR / "db.sqlite"
 FRONTEND_DIST: Path = PROJECT_ROOT / "frontend" / "dist"
+
+
+# --------------------------------------------------------------------------- #
+# Path safety
+# --------------------------------------------------------------------------- #
+
+def resolve_under_data_dir(raw: str | Path) -> Path:
+    """Résout un chemin stocké (BDD ou autre) et garantit qu'il est sous DATA_DIR.
+
+    Sert de garde contre un path traversal si la valeur stockée est corrompue
+    ou compromise (bug d'intégrité, injection indirecte). Lève `ValueError`
+    si le chemin résolu sort de `DATA_DIR`.
+
+    Utilisé par les endpoints `FileResponse` qui servent des fichiers dont le
+    chemin vient de la BDD (GLB, STL, images, ZIPs).
+    """
+    base = DATA_DIR.resolve()
+    resolved = Path(raw).resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(
+            f"Path escapes DATA_DIR: {resolved} not under {base}"
+        ) from exc
+    return resolved

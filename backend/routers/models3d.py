@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -23,6 +22,7 @@ from sqlalchemy import desc, asc
 from sqlalchemy.orm import Session
 
 from app_settings import check_budget_or_raise
+from config import resolve_under_data_dir
 from database import get_db
 from models import Model
 from tasks import run_pipeline_guarded, run_remesh_guarded
@@ -176,9 +176,16 @@ def get_glb(model_id: int, db: Session = Depends(get_db)) -> FileResponse:
         raise HTTPException(404, f"Model {model_id} not found")
     if not m.glb_path:
         raise HTTPException(404, "GLB not generated yet")
-    path = Path(m.glb_path)
+    try:
+        path = resolve_under_data_dir(m.glb_path)
+    except ValueError:
+        logger.error(
+            "Rejected path traversal: model_id=%d glb_path=%r",
+            model_id, m.glb_path,
+        )
+        raise HTTPException(404, "GLB file not accessible")
     if not path.is_file():
-        raise HTTPException(404, f"GLB file missing on disk: {path}")
+        raise HTTPException(404, "GLB file missing on disk")
     return FileResponse(
         path,
         media_type="model/gltf-binary",
@@ -197,9 +204,16 @@ def get_input_image(model_id: int, db: Session = Depends(get_db)) -> FileRespons
         raise HTTPException(404, f"Model {model_id} not found")
     if not m.input_image_path:
         raise HTTPException(404, "No input image for this model")
-    path = Path(m.input_image_path)
+    try:
+        path = resolve_under_data_dir(m.input_image_path)
+    except ValueError:
+        logger.error(
+            "Rejected path traversal: model_id=%d input_image_path=%r",
+            model_id, m.input_image_path,
+        )
+        raise HTTPException(404, "Input image not accessible")
     if not path.is_file():
-        raise HTTPException(404, f"Input image file missing on disk: {path}")
+        raise HTTPException(404, "Input image file missing on disk")
     mime, _ = mimetypes.guess_type(path.name)
     return FileResponse(path, media_type=mime or "image/jpeg")
 

@@ -11,7 +11,6 @@ Cf. ARCHITECTURE §"API Endpoints / Exports" :
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app_settings import check_budget_or_raise
+from config import resolve_under_data_dir
 from database import get_db
 from models import Export, Model
 from tasks import run_export_guarded
@@ -174,9 +174,16 @@ def get_export_zip(export_id: int, db: Session = Depends(get_db)) -> FileRespons
         raise HTTPException(404, f"Export {export_id} not found")
     if not ex.zip_path:
         raise HTTPException(404, "ZIP not generated yet")
-    path = Path(ex.zip_path)
+    try:
+        path = resolve_under_data_dir(ex.zip_path)
+    except ValueError:
+        logger.error(
+            "Rejected path traversal: export_id=%d zip_path=%r",
+            export_id, ex.zip_path,
+        )
+        raise HTTPException(404, "ZIP not accessible")
     if not path.is_file():
-        raise HTTPException(404, f"ZIP file missing on disk: {path}")
+        raise HTTPException(404, "ZIP file missing on disk")
     return FileResponse(
         path,
         media_type="application/zip",

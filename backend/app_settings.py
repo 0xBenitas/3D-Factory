@@ -54,14 +54,17 @@ def get_prompt_instructions() -> str:
     """Instructions utilisateur ajoutées au system prompt de Claude.
 
     Lues à chaque appel (permet de modifier sans redémarrer). Retourne
-    une chaîne vide si non configurées ou en cas d'erreur DB.
+    une chaîne vide si non configurées ou en cas d'erreur DB. Les erreurs
+    DB sont loggées (WARNING) parce qu'une DB injoignable fait taire les
+    prompts custom de l'utilisateur en silence sinon.
     """
     try:
         from database import SessionLocal
 
         with SessionLocal() as db:
             return get_setting(db, "prompt_instructions", "")
-    except Exception:
+    except Exception as exc:
+        logger.warning("get_prompt_instructions: DB read failed (%s)", exc)
         return ""
 
 
@@ -106,6 +109,9 @@ def today_cost_eur(db: Session) -> float:
     )
 
 
+_BUDGET_DISABLED_WARNED: bool = False
+
+
 def check_budget_or_raise(db: Session) -> None:
     """Lève HTTPException 429 si le budget quotidien est dépassé.
 
@@ -113,12 +119,29 @@ def check_budget_or_raise(db: Session) -> None:
     POST /api/pipeline/run, /api/models/{id}/regenerate, /api/models/{id}/remesh,
     /api/exports/generate. Le check intentionnellement ne s'applique PAS
     aux actions gratuites (validation, consultation).
+
+    Si `max_daily_budget_eur <= 0`, la garde est désactivée — on log un
+    WARNING une fois par process pour que l'opérateur s'en rende compte
+    (config accidentelle vs intentionnelle). `GET /api/stats` expose aussi
+    `budget_disabled: true` pour que l'UI affiche un bandeau.
     """
+    global _BUDGET_DISABLED_WARNED
+
     budget = get_float_setting(
         db, "max_daily_budget_eur", config.MAX_DAILY_BUDGET_EUR
     )
     if budget <= 0:
-        return  # 0 = garde désactivée
+        if not _BUDGET_DISABLED_WARNED:
+            logger.warning(
+                "Budget guard DISABLED (max_daily_budget_eur=%.2f). "
+                "Set a positive value in Settings to cap daily spend.",
+                budget,
+            )
+            _BUDGET_DISABLED_WARNED = True
+        return
+    # Budget réactivé : on réarme le warning pour le prochain passage à 0.
+    _BUDGET_DISABLED_WARNED = False
+
     spent = today_cost_eur(db)
     if spent >= budget:
         raise HTTPException(
