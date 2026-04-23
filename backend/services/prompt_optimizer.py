@@ -17,50 +17,18 @@ from pathlib import Path
 import anthropic
 
 import config
-from app_settings import get_prompt_instructions
+from app_settings import get_effective_prompt
+from services import anthropic_helpers
 
 logger = logging.getLogger(__name__)
-
-
-def _compose_system(base: str) -> str:
-    """Ajoute les instructions utilisateur persistées au system prompt.
-
-    Les instructions apparaissent APRÈS les règles verbatim (elles peuvent
-    les compléter mais le modèle voit toujours les règles de base d'abord).
-    """
-    extra = get_prompt_instructions().strip()
-    if not extra:
-        return base
-    return (
-        f"{base}\n\n"
-        "Instructions supplémentaires de l'utilisateur (à respecter en plus des règles ci-dessus) :\n"
-        f"{extra}"
-    )
 
 MAX_PROMPT_CHARS = 600   # Limite Meshy (SPECS §1.1).
 MAX_TOKENS_REPLY = 400
 
-# SPECS §1.1 — verbatim.
-_SYSTEM_TEXT = """Tu es un expert en modélisation 3D pour l'impression. Ton rôle est de transformer une description vague en un prompt optimisé pour un générateur 3D IA.
-
-Règles :
-- Le prompt doit décrire UNIQUEMENT la géométrie (forme, proportions, détails structurels). JAMAIS de couleurs, textures, matériaux visuels.
-- L'objet doit être imprimable en 3D : formes solides, épaisseur minimale 1.5mm partout, pas de parties flottantes, pas de surplombs > 60° si possible.
-- Sois précis sur les proportions relatives (ex: "le pied fait 1/4 de la hauteur totale").
-- Mentionne la symétrie si applicable.
-- Limite : 600 caractères max (limite du moteur).
-- Réponds UNIQUEMENT avec le prompt optimisé, rien d'autre."""
-
-# SPECS §1.2 — verbatim.
-_SYSTEM_IMAGE = """Tu es un expert en modélisation 3D pour l'impression. On te montre une photo d'un objet. Tu dois générer un prompt pour un générateur 3D IA qui reproduira cet objet.
-
-Règles :
-- Décris UNIQUEMENT la géométrie : forme globale, proportions, détails structurels, symétrie.
-- JAMAIS de couleurs, textures, matériaux visuels — on imprime en monochrome.
-- L'objet doit être imprimable : formes solides, épaisseur min 1.5mm, pas de parties flottantes.
-- Si l'objet a des détails trop fins pour l'impression, simplifie-les.
-- Limite : 600 caractères max.
-- Réponds UNIQUEMENT avec le prompt optimisé, rien d'autre."""
+# Défauts verbatim SPECS §1.1 / §1.2 : voir services/prompt_registry.py
+# (briques `prompt_optimizer_text` et `prompt_optimizer_image`).
+# Chargés à chaque appel pour que l'override Settings soit pris en compte
+# sans restart.
 
 
 class PromptOptimizerError(Exception):
@@ -80,11 +48,6 @@ NON_RETRYABLE: tuple[type[PromptOptimizerError], ...] = (
     PromptOptimizerAuthError,
     PromptOptimizerRefused,
 )
-
-
-# Helpers mutualisés avec seo_gen.py et quality_scorer.py — cf.
-# services/anthropic_helpers.py.
-from services import anthropic_helpers  # noqa: E402
 
 
 def _wrap(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
@@ -108,7 +71,7 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_compose_system(_SYSTEM_TEXT),
+            system=get_effective_prompt("prompt_optimizer_text"),
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
@@ -143,7 +106,7 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_compose_system(_SYSTEM_IMAGE),
+            system=get_effective_prompt("prompt_optimizer_image"),
             messages=[
                 {
                     "role": "user",

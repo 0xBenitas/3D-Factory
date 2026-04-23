@@ -23,6 +23,7 @@ from typing import Any
 import anthropic
 
 import config
+from app_settings import get_effective_prompt
 from services import anthropic_helpers
 
 logger = logging.getLogger(__name__)
@@ -51,68 +52,24 @@ NON_RETRYABLE: tuple[type[SeoGenError], ...] = (SeoGenAuthError, SeoGenRefused)
 
 
 # --------------------------------------------------------------------------- #
-# System prompts (verbatim SPECS §1.4 / §1.5 / §1.6)
+# System prompts
 # --------------------------------------------------------------------------- #
+# Défauts verbatim SPECS §1.4 / §1.5 / §1.6 : voir services/prompt_registry.py
+# (briques `seo_listing`, `seo_print_params`, `seo_lifestyle`). Chargés à
+# chaque appel pour honorer l'override Settings sans restart.
+#
+# `seo_listing` contient des placeholders `{max_title_length}`,
+# `{max_description_length}`, `{max_tags}`, `{tone}` — substitués via
+# `format_map(_SafePlaceholders(...))` pour que les `{foo}` inconnus
+# (ajoutés par l'utilisateur dans l'override) restent littéraux au lieu
+# de faire crasher `.format()`.
 
-# SPECS §1.4 — placeholders entre {{}} pour échapper la substitution str.format.
-_SYSTEM_LISTING = """Tu es un expert en vente de fichiers STL sur les marketplaces d'impression 3D (Cults3D, Printables, Thangs). Tu génères des listings optimisés pour maximiser les ventes.
 
-Règles :
-- Le titre doit être accrocheur ET contenir des mots-clés recherchés (max {max_title_length} caractères).
-- La description doit vendre le produit : bénéfices, originalité, cas d'usage. PAS de jargon technique excessif (max {max_description_length} caractères).
-- Inclure les dimensions approximatives basées sur le bounding_box.
-- {max_tags} tags pertinents, mélange de termes génériques ("3D print", "STL") et spécifiques (type d'objet).
-- Prix suggéré en EUR basé sur la complexité (simple = 1-2€, moyen = 2-4€, complexe = 4-8€).
-- Ton : {tone}
+class _SafePlaceholders(dict):
+    """`format_map` tolérant : les clés inconnues restent littérales."""
 
-Réponds UNIQUEMENT en JSON :
-{{
-  "title": "...",
-  "description": "...",
-  "tags": ["...", "..."],
-  "price_eur": 2.99
-}}"""
-
-# SPECS §1.5 — pas de substitution, on peut laisser les { tels quels.
-_SYSTEM_PRINT_PARAMS = """Tu es un expert en impression 3D FDM. À partir des métriques d'un mesh, tu recommandes les paramètres d'impression optimaux.
-
-Réponds UNIQUEMENT en JSON :
-{
-  "layer_height_mm": 0.2,
-  "infill_percent": 20,
-  "supports_needed": false,
-  "support_notes": "Aucun surplomb > 55°",
-  "nozzle_diameter_mm": 0.4,
-  "material_recommended": "PLA",
-  "estimated_print_time_h": 4.5,
-  "estimated_material_g": 35,
-  "orientation_tip": "Imprimer debout, base plate vers le bas",
-  "difficulty": "facile"
-}
-
-Règles :
-- layer_height : 0.2 par défaut, 0.12 si détails fins (faces > 30k), 0.28 si objet simple gros
-- infill : 15% pour déco, 20-30% pour fonctionnel, 50%+ pour pièces mécaniques
-- supports : basé sur max_overhang_angle_deg (> 55° = supports nécessaires)
-- matériau : PLA par défaut, PETG si pièce fonctionnelle, résine si très détaillé (faces > 50k)
-- temps estimé : approximation basée sur volume et infill
-- difficulty : "facile" (pas de supports, simple), "moyen" (supports ou calibration), "avancé" (multi-matériau ou fragile)"""
-
-# SPECS §1.6
-_SYSTEM_LIFESTYLE = """Tu génères un prompt pour une API de génération d'image. Le but : créer une photo lifestyle d'un objet imprimé en 3D, comme une photo produit professionnelle.
-
-Règles :
-- L'objet est imprimé en PLA blanc/gris (pas de couleur flashy).
-- Le contexte doit correspondre au type d'objet.
-- Photo réaliste, éclairage doux naturel, haute qualité.
-- Limite : 200 caractères.
-- Réponds UNIQUEMENT avec le prompt image, rien d'autre.
-
-Exemples par type :
-- Déco/pot : "3D printed white geometric plant pot on wooden shelf, Scandinavian interior, soft natural light, product photography"
-- Figurine : "3D printed gray dragon figurine in glass display case, dramatic side lighting, dark background, product photography"
-- Technique/support : "3D printed white phone stand on minimalist desk, laptop in background, clean studio lighting, product photography"
-- Rangement : "3D printed desk organizer with pens and supplies, modern home office, warm natural light, lifestyle photography\""""
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 DEFAULT_PRINT_PARAMS: dict[str, Any] = {
@@ -155,7 +112,7 @@ async def generate_lifestyle_prompt(object_description: str) -> str:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=400,
-            system=_SYSTEM_LIFESTYLE,
+            system=get_effective_prompt("seo_lifestyle"),
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
@@ -186,11 +143,13 @@ async def generate_listing(
     force le type des tags en str, parse le prix en float.
     """
     client = anthropic_helpers.get_client_or_raise(SeoGenAuthError)
-    system = _SYSTEM_LISTING.format(
-        max_title_length=max_title_length,
-        max_description_length=max_description_length,
-        max_tags=max_tags,
-        tone=tone,
+    system = get_effective_prompt("seo_listing").format_map(
+        _SafePlaceholders(
+            max_title_length=max_title_length,
+            max_description_length=max_description_length,
+            max_tags=max_tags,
+            tone=tone,
+        )
     )
     user_msg = (
         f"Type d'objet : {object_description}\n"
@@ -254,7 +213,7 @@ async def generate_print_params(
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_SYSTEM_PRINT_PARAMS,
+            system=get_effective_prompt("seo_print_params"),
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:

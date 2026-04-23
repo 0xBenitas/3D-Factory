@@ -275,6 +275,63 @@ class LibraryItem(Base):
 
 
 # --------------------------------------------------------------------------- #
+# Model + Export — legacy, conservés pour compat (routeurs non migrés)
+# --------------------------------------------------------------------------- #
+
+class Model(Base):
+    """Modèle 3D legacy (ancienne app). Table 'models' conservée intacte."""
+
+    __tablename__ = "models"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    input_type = Column(String, nullable=False)
+    input_text = Column(Text, nullable=True)
+    input_image_path = Column(String, nullable=True)
+    optimized_prompt = Column(Text, nullable=True)
+    engine = Column(String, nullable=False, index=True)
+    engine_task_id = Column(String, nullable=True)
+    glb_path = Column(String, nullable=True)
+    stl_path = Column(String, nullable=True)
+    mesh_metrics = Column(JSON, nullable=True)
+    repair_log = Column(Text, nullable=True)
+    qc_score = Column(Float, nullable=True, index=True)
+    qc_details = Column(JSON, nullable=True)
+    validation = Column(String, nullable=False, default="pending", index=True)
+    rejection_reason = Column(Text, nullable=True)
+    screenshot_paths = Column(JSON, nullable=True)
+    photo_paths = Column(JSON, nullable=True)
+    image_engine = Column(String, nullable=True)
+    cost_credits = Column(Integer, nullable=False, default=0)
+    cost_eur_estimate = Column(Float, nullable=False, default=0.0)
+    pipeline_status = Column(String, nullable=False, default="prompt", index=True)
+    pipeline_error = Column(Text, nullable=True)
+    pipeline_progress = Column(Integer, nullable=True)
+    cancel_requested = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
+
+
+class Export(Base):
+    """Un export marketplace (ZIP + listing SEO) pour un modèle validé."""
+
+    __tablename__ = "exports"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model_id = Column(
+        Integer,
+        ForeignKey("models.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    template = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    tags = Column(JSON, nullable=False)
+    price_suggested = Column(Float, nullable=False)
+    print_params = Column(JSON, nullable=False)
+    zip_path = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
 # Settings (key/value) — garde compat avec l'app précédente
 # --------------------------------------------------------------------------- #
 

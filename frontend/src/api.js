@@ -140,3 +140,18 @@ export const getCostHints = () => request('/api/costs/hints')
 
 export const getCredits = ({ refresh = false } = {}) =>
   request(`/api/credits${refresh ? '?refresh=1' : ''}`)
+
+// ---------------------------------------------------------------------- //
+// Prompts (system prompts éditables par brique)
+// ---------------------------------------------------------------------- //
+
+export const listPrompts = () => request('/api/prompts')
+
+export const updatePrompt = (brickId, override) =>
+  request(`/api/prompts/${brickId}`, {
+    method: 'PUT',
+    body: { override },
+  })
+
+export const resetPrompt = (brickId) =>
+  request(`/api/prompts/${brickId}`, { method: 'DELETE' })

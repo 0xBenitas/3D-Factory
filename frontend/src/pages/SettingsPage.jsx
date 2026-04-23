@@ -4,7 +4,10 @@ import {
   getStats,
   listEngines,
   listImageEngines,
+  listPrompts,
   listTemplates,
+  resetPrompt,
+  updatePrompt,
   updateSettings,
 } from '../api.js'
 
@@ -119,12 +122,7 @@ export default function SettingsPage() {
         disabled={saving}
       />
 
-      <PromptInstructionsCard
-        value={settings.prompt_instructions || ''}
-        max={settings.prompt_instructions_max || 4000}
-        onSave={(v) => save({ prompt_instructions: v })}
-        disabled={saving}
-      />
+      <PromptsSection />
 
       {savedAt && <div className="settings-saved muted">✓ Enregistré</div>}
 
@@ -176,54 +174,6 @@ function ApiKeysSection({ apiKeys, onSave, disabled }) {
             disabled={disabled}
           />
         ))}
-      </div>
-    </div>
-  )
-}
-
-function PromptInstructionsCard({ value, max, onSave, disabled }) {
-  const [draft, setDraft] = useState(value)
-  useEffect(() => {
-    setDraft(value)
-  }, [value])
-
-  const changed = draft !== value
-  const over = draft.length > max
-
-  return (
-    <div className="stats-overview">
-      <h3>Instructions Claude (prompt optimizer)</h3>
-      <p className="muted">
-        Texte ajouté au system prompt à chaque génération. Utilise-le pour imposer
-        un style récurrent, des contraintes d'impression spécifiques, ou un vocabulaire
-        propre à tes produits. Laisse vide pour les règles par défaut.
-      </p>
-      <textarea
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        disabled={disabled}
-        rows={10}
-        placeholder={`Exemples :\n- Toujours proposer une base stable d'au moins 5mm d'épaisseur.\n- Privilégier les formes organiques plutôt que géométriques.\n- Si objet décoratif, suggérer des motifs en bas-relief (profondeur 2mm max).`}
-        style={{ width: '100%', fontFamily: 'inherit', fontSize: '0.9rem', padding: '0.6rem', boxSizing: 'border-box', resize: 'vertical' }}
-      />
-      <div className="settings-card__inline" style={{ marginTop: 8, justifyContent: 'space-between' }}>
-        <small className={over ? 'error' : 'muted'}>
-          {draft.length} / {max} caractères{over ? ' — dépassé' : ''}
-        </small>
-        <div className="settings-card__inline">
-          {changed && (
-            <button className="btn" onClick={() => setDraft(value)} disabled={disabled}>
-              Annuler
-            </button>
-          )}
-          <button
-            className="btn btn--primary"
-            onClick={() => onSave(draft)}
-            disabled={disabled || !changed || over}
-          >
-            Enregistrer
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -391,6 +341,222 @@ function Stat({ label, value, extra }) {
       <div className="stat__label">{label}</div>
       <div className="stat__value">{value}</div>
       {extra && <div className="stat__extra muted">{extra}</div>}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------- //
+// Prompts système — éditeur par brique (GET/PUT/DELETE /api/prompts)
+
+function PromptsSection() {
+  const [bricks, setBricks] = useState(null)
+  const [maxLength, setMaxLength] = useState(8000)
+  const [openId, setOpenId] = useState(null)
+  const [error, setError] = useState(null)
+
+  const reload = async () => {
+    setError(null)
+    try {
+      const data = await listPrompts()
+      setBricks(data.bricks || [])
+      setMaxLength(data.max_length || 8000)
+    } catch (exc) {
+      setError(exc.detail || exc.message)
+    }
+  }
+
+  useEffect(() => {
+    reload()
+  }, [])
+
+  const onBrickUpdate = (updated) => {
+    setBricks((curr) => (curr || []).map((b) => (b.id === updated.id ? updated : b)))
+  }
+
+  if (bricks === null) {
+    return (
+      <div className="stats-overview">
+        <h3>Prompts système</h3>
+        <p className="muted">Chargement…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stats-overview">
+      <h3>Prompts système</h3>
+      <p className="muted">
+        Édite le system prompt de chaque étape Claude. Laisse vide pour restaurer le défaut.
+        Les modifications sont prises en compte immédiatement, sans redémarrer.
+      </p>
+      {error && <div className="error">{error}</div>}
+      <div className="prompts-list" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {bricks.map((b) => (
+          <PromptBrickRow
+            key={b.id}
+            brick={b}
+            maxLength={maxLength}
+            open={openId === b.id}
+            onToggle={() => setOpenId(openId === b.id ? null : b.id)}
+            onUpdate={onBrickUpdate}
+            onError={setError}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError }) {
+  const [draft, setDraft] = useState(brick.override)
+  const [showDefault, setShowDefault] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setDraft(brick.override)
+  }, [brick.override])
+
+  const changed = draft !== brick.override
+  const over = draft.length > maxLength
+
+  const save = async () => {
+    setBusy(true)
+    onError(null)
+    try {
+      const updated = await updatePrompt(brick.id, draft)
+      onUpdate(updated)
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reset = async () => {
+    if (!confirm(`Restaurer le prompt par défaut de "${brick.label}" ?`)) return
+    setBusy(true)
+    onError(null)
+    try {
+      const updated = await resetPrompt(brick.id)
+      onUpdate(updated)
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="settings-card" style={{ padding: 12 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          all: 'unset',
+          cursor: 'pointer',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          width: '100%',
+        }}
+      >
+        <div>
+          <strong>{brick.label}</strong>
+          {brick.is_custom && (
+            <span className="muted" style={{ marginLeft: 8, fontSize: '0.8em' }}>
+              • personnalisé
+            </span>
+          )}
+        </div>
+        <span className="muted">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <p className="muted" style={{ marginTop: 0 }}>{brick.description}</p>
+
+          {brick.placeholders.length > 0 && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              <strong>Placeholders obligatoires :</strong>{' '}
+              {brick.placeholders.map((p) => `{${p}}`).join(', ')}
+            </p>
+          )}
+
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={busy}
+            rows={12}
+            placeholder={`Laisse vide pour utiliser le défaut (${brick.default.length} chars).`}
+            style={{
+              width: '100%',
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: '0.85rem',
+              padding: '0.6rem',
+              boxSizing: 'border-box',
+              resize: 'vertical',
+            }}
+          />
+
+          <div
+            className="settings-card__inline"
+            style={{ marginTop: 8, justifyContent: 'space-between' }}
+          >
+            <small className={over ? 'error' : 'muted'}>
+              {draft.length} / {maxLength} caractères{over ? ' — dépassé' : ''}
+            </small>
+            <div className="settings-card__inline">
+              {changed && (
+                <button
+                  className="btn"
+                  onClick={() => setDraft(brick.override)}
+                  disabled={busy}
+                >
+                  Annuler
+                </button>
+              )}
+              {brick.is_custom && (
+                <button className="btn" onClick={reset} disabled={busy}>
+                  Reset défaut
+                </button>
+              )}
+              <button
+                className="btn btn--primary"
+                onClick={save}
+                disabled={busy || !changed || over}
+              >
+                Enregistrer
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowDefault((v) => !v)}
+            >
+              {showDefault ? 'Masquer' : 'Afficher'} le prompt par défaut
+            </button>
+            {showDefault && (
+              <pre
+                style={{
+                  marginTop: 8,
+                  padding: 10,
+                  background: 'rgba(127,127,127,0.08)',
+                  borderRadius: 4,
+                  fontSize: '0.78rem',
+                  maxHeight: 300,
+                  overflow: 'auto',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {brick.default}
+              </pre>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

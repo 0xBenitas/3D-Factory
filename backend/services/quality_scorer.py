@@ -20,41 +20,15 @@ from typing import Any
 import anthropic
 
 import config
+from app_settings import get_effective_prompt
 from services import anthropic_helpers
 
 logger = logging.getLogger(__name__)
 
 MAX_TOKENS_REPLY = 1500
 
-# SPECS §1.3 — verbatim.
-_SYSTEM = """Tu es un expert en impression 3D FDM/SLA. On te donne les métriques brutes d'un mesh 3D. Tu dois évaluer sa qualité pour l'impression et donner un score sur 10.
-
-Évalue chaque critère sur 10 et donne un score global (moyenne pondérée) :
-
-1. Manifold (poids 2) : is_manifold=true → 10/10, false → 2/10. Un mesh non-manifold a des arêtes partagées par plus de 2 faces.
-2. Watertight (poids 2) : is_watertight=true → 10/10, false → 3/10. Nécessaire pour le slicing.
-3. Épaisseur des parois (poids 2) : min_wall_thickness_mm >= 1.5mm = 10/10, entre 0.8 et 1.5 = 5/10, < 0.8 = 2/10.
-4. Surplombs (poids 1) : max_overhang_angle_deg <= 45° = 10/10, 45-60° = 7/10, > 60° = 4/10 (supports nécessaires).
-5. Parties flottantes (poids 2) : connected_components == 1 = 10/10, > 1 = 2/10.
-6. Faces dégénérées (poids 1) : 0 = 10/10, < 1% du total = 7/10, > 1% = 3/10.
-7. Nombre de faces (poids 0.5) : 5k-50k = 10/10, 50k-100k = 7/10, > 100k = 5/10 (lourd pour les slicers).
-8. Proportions (poids 0.5) : bounding_box cohérent avec le type d'objet.
-
-Réponds UNIQUEMENT en JSON, pas de texte autour :
-{
-  "score": 7.5,
-  "criteria": {
-    "manifold": { "score": 10, "note": "OK" },
-    "watertight": { "score": 10, "note": "OK" },
-    "wall_thickness": { "score": 6, "note": "Min 1.2mm, un peu juste" },
-    "overhangs": { "score": 8, "note": "Max 52°, supports optionnels" },
-    "floating_parts": { "score": 10, "note": "1 seul composant" },
-    "degenerate_faces": { "score": 10, "note": "0 faces dégénérées" },
-    "face_count": { "score": 10, "note": "12.4k faces, optimal" },
-    "proportions": { "score": 9, "note": "Bounding box cohérent" }
-  },
-  "summary": "Bon modèle, attention à l'épaisseur minimale sur les bords fins. Imprimable sans supports."
-}"""
+# Défaut verbatim SPECS §1.3 : voir services/prompt_registry.py
+# (brique `quality_scorer`). Chargé à chaque appel.
 
 
 @dataclass
@@ -92,7 +66,7 @@ async def score_mesh(
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=MAX_TOKENS_REPLY,
-            system=_SYSTEM,
+            system=get_effective_prompt("quality_scorer"),
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:

@@ -27,6 +27,7 @@ from routers import credits as credits_router
 from routers import exports as exports_router
 from routers import models3d as models3d_router
 from routers import pipeline as pipeline_router
+from routers import prompts as prompts_router
 from routers import services as services_router
 from routers import settings as settings_router
 from routers import stats as stats_router
@@ -89,6 +90,7 @@ app.include_router(services_router.router)
 app.include_router(settings_router.router)
 app.include_router(stats_router.router)
 app.include_router(credits_router.router)
+app.include_router(prompts_router.router)
 
 
 # --------------------------------------------------------------------------- #

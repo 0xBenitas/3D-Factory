@@ -24,7 +24,6 @@ from app_settings import (
     API_KEY_NAMES,
     API_KEY_SETTING_KEYS,
     KNOWN_KEYS,
-    PROMPT_INSTRUCTIONS_MAX,
     get_setting,
     set_setting,
 )
@@ -56,7 +55,6 @@ class SettingsPayload(BaseModel):
     api_key_meshy: str | None = Field(default=None, max_length=512)
     api_key_tripo: str | None = Field(default=None, max_length=512)
     api_key_stability: str | None = Field(default=None, max_length=512)
-    prompt_instructions: str | None = Field(default=None, max_length=PROMPT_INSTRUCTIONS_MAX)
 
 
 class ApiKeyStatus(BaseModel):
@@ -70,8 +68,6 @@ class SettingsView(BaseModel):
     default_template: str
     max_daily_budget_eur: float
     api_keys: dict[str, ApiKeyStatus]
-    prompt_instructions: str
-    prompt_instructions_max: int = PROMPT_INSTRUCTIONS_MAX
 
 
 def _mask(value: str) -> str:
@@ -111,7 +107,6 @@ def _read_all(db: Session) -> SettingsView:
             get_setting(db, "max_daily_budget_eur", "2.00"), 2.00,
         ),
         api_keys=api_keys,
-        prompt_instructions=get_setting(db, "prompt_instructions", ""),
     )
 
 

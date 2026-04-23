@@ -44,28 +44,39 @@ KNOWN_KEYS: frozenset[str] = frozenset({
     "default_image_engine",
     "default_template",
     "max_daily_budget_eur",
-    "prompt_instructions",
 }) | API_KEY_SETTING_KEYS
 
-PROMPT_INSTRUCTIONS_MAX = 4000
+# Taille max d'un override per-brick (remplacement total d'un system prompt).
+PROMPT_OVERRIDE_MAX = 8000
 
 
-def get_prompt_instructions() -> str:
-    """Instructions utilisateur ajoutées au system prompt de Claude.
+def _prompt_override_key(brick_id: str) -> str:
+    """Clé de stockage BDD pour l'override d'une brique."""
+    return f"prompt_override_{brick_id}"
 
-    Lues à chaque appel (permet de modifier sans redémarrer). Retourne
-    une chaîne vide si non configurées ou en cas d'erreur DB. Les erreurs
-    DB sont loggées (WARNING) parce qu'une DB injoignable fait taire les
-    prompts custom de l'utilisateur en silence sinon.
+
+def get_prompt_override(brick_id: str) -> str:
+    """Override BDD pour une brique de prompt (chaîne vide = pas d'override).
+
+    Lu à chaque appel (permet de changer un prompt sans redémarrer). On
+    log les erreurs DB pour ne pas masquer un problème plus large.
     """
     try:
         from database import SessionLocal
 
         with SessionLocal() as db:
-            return get_setting(db, "prompt_instructions", "")
+            return get_setting(db, _prompt_override_key(brick_id), "")
     except Exception as exc:
-        logger.warning("get_prompt_instructions: DB read failed (%s)", exc)
+        logger.warning("get_prompt_override(%s): DB read failed (%s)", brick_id, exc)
         return ""
+
+
+def get_effective_prompt(brick_id: str) -> str:
+    """System prompt actuel pour une brique : override si défini, sinon défaut."""
+    from services.prompt_registry import get_default
+
+    override = get_prompt_override(brick_id).strip()
+    return override if override else get_default(brick_id)
 
 
 def get_setting(db: Session, key: str, fallback: str = "") -> str:
