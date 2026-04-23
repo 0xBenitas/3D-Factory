@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 import anthropic
 
 import config
+from services import anthropic_helpers
 
 logger = logging.getLogger(__name__)
 
@@ -130,57 +130,17 @@ DEFAULT_PRINT_PARAMS: dict[str, Any] = {
 
 
 # --------------------------------------------------------------------------- #
-# Helpers communs
+# Helpers communs (cf. services/anthropic_helpers.py pour la plomberie
+# Claude partagée avec prompt_optimizer et quality_scorer).
 # --------------------------------------------------------------------------- #
 
-def _client() -> anthropic.AsyncAnthropic:
-    key = config.get_api_key("anthropic")
-    if not key:
-        raise SeoGenAuthError("ANTHROPIC_API_KEY not configured (set it in Settings)")
-    return anthropic.AsyncAnthropic(api_key=key)
-
-
-def _extract_text(message: anthropic.types.Message) -> str:
-    parts: list[str] = []
-    for block in message.content:
-        t = getattr(block, "text", None)
-        if t:
-            parts.append(t)
-    return "".join(parts).strip()
-
-
-def _parse_json(raw: str) -> dict | None:
-    """Parse tolérant : accepte Markdown fenced ou JSON brut embarqué."""
-    if not raw:
-        return None
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    candidate = fenced.group(1) if fenced else raw
-    if not candidate.lstrip().startswith("{"):
-        m = re.search(r"\{.*\}", candidate, re.DOTALL)
-        if not m:
-            return None
-        candidate = m.group(0)
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        logger.warning("seo_gen: JSON parse error: %s", exc)
-        return None
-
-
-def _wrap_api_error(exc: anthropic.APIError, context: str) -> SeoGenError:
-    if isinstance(exc, anthropic.AuthenticationError):
-        return SeoGenAuthError(f"Claude auth failed ({context}): {exc}")
-    if isinstance(exc, anthropic.BadRequestError):
-        return SeoGenRefused(f"Claude rejected request ({context}): {exc}")
-    return SeoGenError(f"Claude API error ({context}): {exc}")
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    cut = text[:max_chars]
-    space = cut.rfind(" ")
-    return cut[:space] if space > max_chars - 50 else cut
+def _wrap(exc: anthropic.APIError, context: str) -> SeoGenError:
+    return anthropic_helpers.wrap_api_error(  # type: ignore[return-value]
+        exc, context,
+        auth_cls=SeoGenAuthError,
+        refused_cls=SeoGenRefused,
+        generic_cls=SeoGenError,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -189,7 +149,7 @@ def _truncate(text: str, max_chars: int) -> str:
 
 async def generate_lifestyle_prompt(object_description: str) -> str:
     """Génère un prompt image ≤ 200 chars adapté au type d'objet."""
-    client = _client()
+    client = anthropic_helpers.get_client_or_raise(SeoGenAuthError)
     user_msg = f"Type d'objet : {object_description}"
     try:
         message = await client.messages.create(
@@ -199,12 +159,12 @@ async def generate_lifestyle_prompt(object_description: str) -> str:
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
-        raise _wrap_api_error(exc, "lifestyle_prompt") from exc
+        raise _wrap(exc, "lifestyle_prompt") from exc
 
-    text = _extract_text(message)
+    text = anthropic_helpers.extract_text(message)
     if not text:
         raise SeoGenError("Claude returned empty lifestyle prompt")
-    return _truncate(text, LIFESTYLE_MAX_CHARS)
+    return anthropic_helpers.truncate_smart(text, LIFESTYLE_MAX_CHARS)
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +185,7 @@ async def generate_listing(
     Sanitize côté Python : tronque aux longueurs max si Claude déborde,
     force le type des tags en str, parse le prix en float.
     """
-    client = _client()
+    client = anthropic_helpers.get_client_or_raise(SeoGenAuthError)
     system = _SYSTEM_LISTING.format(
         max_title_length=max_title_length,
         max_description_length=max_description_length,
@@ -247,15 +207,17 @@ async def generate_listing(
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
-        raise _wrap_api_error(exc, "listing") from exc
+        raise _wrap(exc, "listing") from exc
 
-    data = _parse_json(_extract_text(message))
+    data = anthropic_helpers.parse_json_tolerant(anthropic_helpers.extract_text(message))
     if not isinstance(data, dict):
         raise SeoGenError("Claude returned non-JSON listing")
 
-    title = _truncate(str(data.get("title", "")).strip(), max_title_length)
-    description = _truncate(
-        str(data.get("description", "")).strip(), max_description_length
+    title = anthropic_helpers.truncate_smart(
+        str(data.get("title", "")).strip(), max_title_length,
+    )
+    description = anthropic_helpers.truncate_smart(
+        str(data.get("description", "")).strip(), max_description_length,
     )
     raw_tags = data.get("tags") or []
     tags = [str(t).strip() for t in raw_tags if str(t).strip()][:max_tags]
@@ -283,7 +245,7 @@ async def generate_print_params(
     """Génère les `print_params`. Les clés manquantes sont remplies depuis
     `DEFAULT_PRINT_PARAMS` (pour garantir un schéma stable en BDD).
     """
-    client = _client()
+    client = anthropic_helpers.get_client_or_raise(SeoGenAuthError)
     user_msg = (
         f"Type d'objet : {object_description}\n"
         f"Métriques : {json.dumps(mesh_metrics, indent=2)}"
@@ -296,9 +258,9 @@ async def generate_print_params(
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
-        raise _wrap_api_error(exc, "print_params") from exc
+        raise _wrap(exc, "print_params") from exc
 
-    data = _parse_json(_extract_text(message))
+    data = anthropic_helpers.parse_json_tolerant(anthropic_helpers.extract_text(message))
     if not isinstance(data, dict):
         raise SeoGenError("Claude returned non-JSON print_params")
 

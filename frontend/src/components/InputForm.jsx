@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import EngineSelector from './EngineSelector.jsx'
+import { getCostHints } from '../api.js'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const ACCEPTED_MIMES = ['image/jpeg', 'image/png']
 
-// Coûts approximatifs (cohérents avec backend/costs.py). Juste un hint UI,
-// la valeur réelle est calculée côté serveur et affichée dans le CostTracker.
-const COST_GEN_EUR = 0.11       // prompt (~0,003) + meshy preview (~0,10) + scoring (~0,005)
-const COST_EXPORT_EUR = 0.10    // lifestyle + 3×stability + listing + print_params
+// Fallback si l'appel `/api/costs/hints` échoue (réseau, déploiement partiel).
+// Ces valeurs doivent rester cohérentes avec `backend/costs.py` — elles ne
+// servent que si le backend est inaccessible, donc pas dramatique si elles
+// dérivent un peu.
+const FALLBACK_COST_GEN = 0.11
+const FALLBACK_COST_EXPORT = 0.10
 
 // InputForm — textarea OU drop image + EngineSelector + bouton Go.
 // SPECS §4.1 :
@@ -21,6 +24,7 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
   const [imagePreview, setImagePreview] = useState(null)
   const [engine, setEngine] = useState('')
   const [error, setError] = useState(null)
+  const [costHints, setCostHints] = useState(null)
 
   // Libère l'URL object lors du changement d'image.
   useEffect(() => {
@@ -32,6 +36,19 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
     setImagePreview(url)
     return () => URL.revokeObjectURL(url)
   }, [imageFile])
+
+  // Coûts dynamiques depuis le backend (évite la dérive avec costs.py).
+  // En cas d'échec on garde les fallbacks — le formulaire reste utilisable.
+  useEffect(() => {
+    let cancelled = false
+    getCostHints()
+      .then((h) => { if (!cancelled) setCostHints(h) })
+      .catch(() => { /* fallbacks utilisés */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const costGen = costHints?.generation_eur ?? FALLBACK_COST_GEN
+  const costExport = costHints?.export_eur ?? FALLBACK_COST_EXPORT
 
   const handleFile = (file) => {
     setError(null)
@@ -127,8 +144,8 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
       </div>
 
       <div className="input-form__hint muted">
-        Coût estimé : <strong>~{COST_GEN_EUR.toFixed(2)}€</strong> pour la génération
-        {' '}· <strong>+{COST_EXPORT_EUR.toFixed(2)}€</strong> si tu valides et exportes.
+        Coût estimé : <strong>~{costGen.toFixed(2)}€</strong> pour la génération
+        {' '}· <strong>+{costExport.toFixed(2)}€</strong> si tu valides et exportes.
       </div>
 
       {disabledReason && <div className="error">{disabledReason}</div>}

@@ -1,12 +1,7 @@
+import { scoreClass } from '../utils/score.js'
+
 // SPECS §4.4 : carte score + métriques mesh brutes.
 // Les métriques sont TOUJOURS affichées même si le score Claude est null.
-
-function scoreClass(score) {
-  if (score == null) return 'score--muted'
-  if (score < 4) return 'score--bad'
-  if (score < 6) return 'score--warn'
-  return 'score--good'
-}
 
 function metricBadge(value, thresholds, unit = '') {
   // thresholds = { good: v=>bool, warn: v=>bool }. Par défaut ok.

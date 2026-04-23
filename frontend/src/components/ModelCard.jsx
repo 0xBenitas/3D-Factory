@@ -1,3 +1,5 @@
+import { scoreClass } from '../utils/score.js'
+
 // SPECS §4 : miniature dans la grille de ModelsPage.
 // Pas de thumbnail à ce stade (Phase 4 ajoutera les screenshots) — on
 // montre un bloc texte riche + status/score.
@@ -18,13 +20,6 @@ const PIPELINE_LABELS = {
   packing: 'Export…',
   done: 'Terminé',
   failed: 'Échec',
-}
-
-function scoreClass(score) {
-  if (score == null) return 'score--muted'
-  if (score < 4) return 'score--bad'
-  if (score < 6) return 'score--warn'
-  return 'score--good'
 }
 
 export default function ModelCard({ model, selected = false, onClick }) {

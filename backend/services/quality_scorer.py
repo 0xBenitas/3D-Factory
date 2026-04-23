@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import anthropic
 
 import config
+from services import anthropic_helpers
 
 logger = logging.getLogger(__name__)
 
@@ -70,35 +70,6 @@ class QualityScoreResult:
     summary: str | None = None
 
 
-def _extract_text(message: anthropic.types.Message) -> str:
-    parts: list[str] = []
-    for block in message.content:
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    return "".join(parts).strip()
-
-
-def _parse_json(raw: str) -> dict | None:
-    """Parse une réponse Claude en JSON, tolérant aux entourages markdown."""
-    if not raw:
-        return None
-    # Strip ```json … ``` si Claude ajoute du markdown.
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-    candidate = fenced.group(1) if fenced else raw
-    # Fallback : premier { ... } trouvé.
-    if not candidate.lstrip().startswith("{"):
-        m = re.search(r"\{.*\}", candidate, re.DOTALL)
-        if not m:
-            return None
-        candidate = m.group(0)
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        logger.warning("QualityScorer: JSON parse error: %s", exc)
-        return None
-
-
 async def score_mesh(
     mesh_metrics: dict,
     object_description: str,
@@ -128,8 +99,8 @@ async def score_mesh(
         logger.warning("QualityScorer: Claude API error, skipping: %s", exc)
         return QualityScoreResult()
 
-    raw = _extract_text(message)
-    data = _parse_json(raw)
+    raw = anthropic_helpers.extract_text(message)
+    data = anthropic_helpers.parse_json_tolerant(raw)
     if not data:
         logger.warning("QualityScorer: unparseable response, skipping")
         return QualityScoreResult()

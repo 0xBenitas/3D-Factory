@@ -82,45 +82,18 @@ NON_RETRYABLE: tuple[type[PromptOptimizerError], ...] = (
 )
 
 
-def _client() -> anthropic.AsyncAnthropic:
-    key = config.get_api_key("anthropic")
-    if not key:
-        raise PromptOptimizerAuthError("ANTHROPIC_API_KEY not configured (set it in Settings)")
-    return anthropic.AsyncAnthropic(api_key=key)
+# Helpers mutualisés avec seo_gen.py et quality_scorer.py — cf.
+# services/anthropic_helpers.py.
+from services import anthropic_helpers  # noqa: E402
 
 
-def _wrap_api_error(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
-    """Traduit une erreur du SDK Anthropic en exception typée du service.
-
-    - AuthenticationError (401) → non-retryable (clé invalide)
-    - BadRequestError (400)     → non-retryable (safety filter)
-    - tout le reste (429, 5xx, réseau) → retryable
-    """
-    if isinstance(exc, anthropic.AuthenticationError):
-        return PromptOptimizerAuthError(f"Claude auth failed ({context}): {exc}")
-    if isinstance(exc, anthropic.BadRequestError):
-        return PromptOptimizerRefused(f"Claude rejected request ({context}): {exc}")
-    return PromptOptimizerError(f"Claude API error ({context}): {exc}")
-
-
-def _extract_text(message: anthropic.types.Message) -> str:
-    """Concatène les blocs de texte d'une réponse Claude."""
-    parts: list[str] = []
-    for block in message.content:
-        # On ignore les blocs non-texte éventuels (tool_use, etc.).
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    return "".join(parts).strip()
-
-
-def _truncate(text: str) -> str:
-    """Tronque proprement à MAX_PROMPT_CHARS sans couper en milieu de mot."""
-    if len(text) <= MAX_PROMPT_CHARS:
-        return text
-    cut = text[:MAX_PROMPT_CHARS]
-    space = cut.rfind(" ")
-    return cut[:space] if space > MAX_PROMPT_CHARS - 50 else cut
+def _wrap(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
+    return anthropic_helpers.wrap_api_error(  # type: ignore[return-value]
+        exc, context,
+        auth_cls=PromptOptimizerAuthError,
+        refused_cls=PromptOptimizerRefused,
+        generic_cls=PromptOptimizerError,
+    )
 
 
 async def optimize_from_text(user_input: str, engine_name: str) -> str:
@@ -130,7 +103,7 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
     """
     user_msg = f"Moteur cible : {engine_name}\nDescription utilisateur : {user_input}"
 
-    client = _client()
+    client = anthropic_helpers.get_client_or_raise(PromptOptimizerAuthError)
     try:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
@@ -139,12 +112,12 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
             messages=[{"role": "user", "content": user_msg}],
         )
     except anthropic.APIError as exc:
-        raise _wrap_api_error(exc, "optimize_from_text") from exc
+        raise _wrap(exc, "optimize_from_text") from exc
 
-    result = _extract_text(message)
+    result = anthropic_helpers.extract_text(message)
     if not result:
         raise PromptOptimizerError("Claude returned empty prompt (possibly filtered)")
-    truncated = _truncate(result)
+    truncated = anthropic_helpers.truncate_smart(result, MAX_PROMPT_CHARS)
     logger.info(
         "Prompt optimized (text): %d→%d chars, engine=%s",
         len(user_input), len(truncated), engine_name,
@@ -165,7 +138,7 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
 
     image_b64 = base64.b64encode(p.read_bytes()).decode("ascii")
 
-    client = _client()
+    client = anthropic_helpers.get_client_or_raise(PromptOptimizerAuthError)
     try:
         message = await client.messages.create(
             model=config.CLAUDE_MODEL,
@@ -192,12 +165,12 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
             ],
         )
     except anthropic.APIError as exc:
-        raise _wrap_api_error(exc, "optimize_from_image") from exc
+        raise _wrap(exc, "optimize_from_image") from exc
 
-    result = _extract_text(message)
+    result = anthropic_helpers.extract_text(message)
     if not result:
         raise PromptOptimizerError("Claude returned empty prompt (possibly filtered)")
-    truncated = _truncate(result)
+    truncated = anthropic_helpers.truncate_smart(result, MAX_PROMPT_CHARS)
     logger.info(
         "Prompt optimized (image): %s → %d chars, engine=%s",
         p.name, len(truncated), engine_name,
