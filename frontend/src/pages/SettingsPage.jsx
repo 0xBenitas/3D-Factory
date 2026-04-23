@@ -136,12 +136,28 @@ export default function SettingsPage() {
 // ---------------------------------------------------------------------- //
 // API keys
 
+// `prefix` et `minLen` servent à un pré-check côté client : on alerte mais
+// on ne bloque PAS le submit (les API peuvent changer leur format sans
+// nous prévenir — mieux vaut un faux positif avertissant qu'un rejet dur
+// qui empêche de saisir une clé légitime).
 const API_KEY_DEFS = [
-  { name: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...' },
-  { name: 'meshy', label: 'Meshy', placeholder: 'msy_...' },
-  { name: 'tripo', label: 'Tripo', placeholder: 'tsk_...' },
-  { name: 'stability', label: 'Stability AI', placeholder: 'sk-...' },
+  { name: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...', prefix: 'sk-ant-', minLen: 20 },
+  { name: 'meshy',     label: 'Meshy',              placeholder: 'msy_...',    prefix: 'msy_',    minLen: 20 },
+  { name: 'tripo',     label: 'Tripo',              placeholder: 'tsk_...',    prefix: 'tsk_',    minLen: 20 },
+  { name: 'stability', label: 'Stability AI',       placeholder: 'sk-...',     prefix: 'sk-',     minLen: 20 },
 ]
+
+function validateApiKey(def, draft) {
+  if (!draft) return null
+  const errors = []
+  if (def.prefix && !draft.startsWith(def.prefix)) {
+    errors.push(`commence normalement par "${def.prefix}"`)
+  }
+  if (def.minLen && draft.length < def.minLen) {
+    errors.push(`au moins ${def.minLen} caractères (actuel : ${draft.length})`)
+  }
+  return errors.length > 0 ? errors.join(' ; ') : null
+}
 
 function ApiKeysSection({ apiKeys, onSave, disabled }) {
   return (
@@ -217,6 +233,8 @@ function ApiKeyCard({ def, status, onSave, disabled }) {
   const [draft, setDraft] = useState('')
   const [show, setShow] = useState(false)
 
+  const formatWarning = validateApiKey(def, draft)
+
   const save = () => {
     onSave(draft)
     setDraft('')
@@ -242,6 +260,7 @@ function ApiKeyCard({ def, status, onSave, disabled }) {
           onChange={(e) => setDraft(e.target.value)}
           disabled={disabled}
           autoComplete="off"
+          aria-invalid={formatWarning ? 'true' : 'false'}
         />
         <button
           type="button"
@@ -252,6 +271,11 @@ function ApiKeyCard({ def, status, onSave, disabled }) {
           {show ? 'Masquer' : 'Afficher'}
         </button>
       </div>
+      {formatWarning && (
+        <small className="muted" style={{ color: 'var(--warn)', marginTop: 4 }}>
+          ⚠ Format inhabituel : {formatWarning}. L'enregistrement reste possible.
+        </small>
+      )}
       <div className="settings-card__inline" style={{ marginTop: 6 }}>
         <button
           className="btn btn--primary"
