@@ -144,6 +144,18 @@ Tranché : preview-only par défaut, 2-stage en opt-in par génération. Voir bl
 - [ ] Seeds : Figurine classique, Prototype technique, Showcase marketplace, Debug
 - [ ] UI : sauvegarder/charger preset, preset appliqué réutilisable sur n'importe quel modèle
 
+### 2.10b. Historique des actions modèle (timeline UX)
+Petit ajout UX : voir d'un coup d'œil ce qui a déjà été fait sur un modèle (repair, regen, remesh…) pour éviter les actions doublon et comprendre les variations de score.
+
+- [ ] Table `model_events` append-only : `id, model_id FK CASCADE, event_type, details_json (JSON nullable), created_at`
+- [ ] Event types : `created`, `optimized`, `generated`, `repaired` (mode + delta watertight), `scored` (score + delta vs précédent), `regenerated`, `remeshed`, `repair_only`
+- [ ] Hooks dans `tasks.py` aux moments clés (logger non-bloquant, try/except large pour ne jamais casser le pipeline)
+- [ ] Endpoint `GET /api/models/{id}/events` (read-only, ordre chronologique ASC)
+- [ ] UI : timeline verticale compacte dans le panneau modèle (icône par event_type + label court + timestamp relatif "il y a 3 min" via `Intl.RelativeTimeFormat`)
+- [ ] Pas de pagination (volume négligeable, < 20 events/modèle en pratique)
+- [ ] **Pas de backfill** des modèles existants — historique démarre au déploiement (la valeur est dans le travail futur, pas la rétrospective)
+- [ ] Test : 1 test endpoint (modèle avec 3 events → 200 + ordre correct)
+
 ### 2.11. Banque d'images + image-to-3D ciblé
 Meshy `image-to-3d` est **déjà supporté**. Il manque la couche assets.
 

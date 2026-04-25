@@ -735,6 +735,15 @@ kbd {
 }
 .model-viewer__reset:hover { background: rgba(79, 140, 255, 0.35); transform: rotate(-30deg); }
 
+/* ---- Studio viewer leva panel (Phase 2.10) ---- */
+/* leva expose un wrapper #leva__root au niveau body — on le contraint
+   au-dessus du Canvas et on le cache sur mobile (G7) car le panneau
+   dev-tools n'est pas tactile-friendly. */
+#leva__root { z-index: 5; }
+@media (max-width: 768px) {
+  #leva__root { display: none !important; }
+}
+
 /* ---- Prompts section : groupes par étape ---- */
 .prompts-groups { display: flex; flex-direction: column; gap: 1.2rem; }
 .prompt-group { display: flex; flex-direction: column; gap: 0.5rem; }
