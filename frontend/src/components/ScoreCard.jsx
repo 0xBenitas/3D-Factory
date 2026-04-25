@@ -14,10 +14,17 @@ function metricBadge(value, thresholds, unit = '') {
   return { icon: '✕', cls: 'metric--bad', text: String(value) + unit }
 }
 
-export default function ScoreCard({ score, meshMetrics, qcDetails }) {
+const CATEGORY_LABELS = {
+  Figurine: { emoji: '🗿', tip: 'Profil scoring : manifold + watertight + proportions priorisés.' },
+  Fonctionnel: { emoji: '🔩', tip: 'Profil scoring : parois, surplombs et géométrie propre priorisés.' },
+  Déco: { emoji: '🪴', tip: 'Profil scoring : équilibré, proportions priorisées.' },
+}
+
+export default function ScoreCard({ score, meshMetrics, qcDetails, category }) {
   const hasScore = score !== null && score !== undefined
   const summary = qcDetails?.summary
   const m = meshMetrics || {}
+  const catLabel = category && CATEGORY_LABELS[category]
 
   // Règles de badge alignées avec SPECS §1.3 et §4.4.
   const manifold = {
@@ -66,6 +73,11 @@ export default function ScoreCard({ score, meshMetrics, qcDetails }) {
           <>
             <span className="score-card__value">{score.toFixed(1)}</span>
             <span className="score-card__max"> / 10</span>
+            {catLabel && (
+              <span className="score-card__category" title={catLabel.tip}>
+                {catLabel.emoji} {category}
+              </span>
+            )}
             <div className="score-bar">
               <div
                 className="score-bar__fill"

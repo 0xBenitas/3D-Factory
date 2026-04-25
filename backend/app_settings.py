@@ -27,7 +27,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import config
-from models import Model, Setting
+from models import GenerationPrompt, Model, Prompt, Setting
 
 logger = logging.getLogger(__name__)
 
@@ -46,37 +46,121 @@ KNOWN_KEYS: frozenset[str] = frozenset({
     "max_daily_budget_eur",
 }) | API_KEY_SETTING_KEYS
 
-# Taille max d'un override per-brick (remplacement total d'un system prompt).
+# Taille max du contenu d'un preset (Phase 1.5).
 PROMPT_OVERRIDE_MAX = 8000
 
 
-def _prompt_override_key(brick_id: str) -> str:
-    """Clé de stockage BDD pour l'override d'une brique."""
-    return f"prompt_override_{brick_id}"
+def get_active_prompt(brick_id: str) -> Prompt | None:
+    """Preset actif pour la brique (ligne `prompts.is_active=1`)."""
+    try:
+        from database import SessionLocal
+
+        with SessionLocal() as db:
+            return (
+                db.query(Prompt)
+                .filter(Prompt.brick_id == brick_id, Prompt.is_active.is_(True))
+                .first()
+            )
+    except Exception as exc:
+        logger.warning("get_active_prompt(%s): DB read failed (%s)", brick_id, exc)
+        return None
 
 
-def get_prompt_override(brick_id: str) -> str:
-    """Override BDD pour une brique de prompt (chaîne vide = pas d'override).
+def get_effective_prompt(brick_id: str) -> str:
+    """System prompt à utiliser pour une brique : contenu du preset actif,
+    fallback sur le défaut du registry si la biblio est vide (cas avant
+    `init_db`).
+    """
+    from services.prompt_registry import get_default
 
-    Lu à chaque appel (permet de changer un prompt sans redémarrer). On
-    log les erreurs DB pour ne pas masquer un problème plus large.
+    active = get_active_prompt(brick_id)
+    if active and active.content:
+        return active.content
+    return get_default(brick_id)
+
+
+def get_active_prompt_id(brick_id: str) -> int | None:
+    """Helper pour le tracking generation_prompts."""
+    active = get_active_prompt(brick_id)
+    return active.id if active else None
+
+
+def track_prompt_use(model_id: int, brick_id: str) -> int | None:
+    """Enregistre que le prompt actif de `brick_id` a servi à `model_id`.
+
+    Idempotent (UPSERT sur PK composite (model_id, brick_id)) — refaire
+    le pipeline sur le même modèle écrase la traçabilité avec le prompt
+    courant. `usage_count` est incrémenté seulement si la ligne est neuve.
+
+    Retourne le prompt_id tracé, ou None si pas de prompt actif (cas de
+    bug — la migration init_db garantit qu'il y en a un).
     """
     try:
         from database import SessionLocal
 
         with SessionLocal() as db:
-            return get_setting(db, _prompt_override_key(brick_id), "")
+            active = (
+                db.query(Prompt)
+                .filter(Prompt.brick_id == brick_id, Prompt.is_active.is_(True))
+                .first()
+            )
+            if active is None:
+                logger.warning("track_prompt_use: no active prompt for brick='%s'", brick_id)
+                return None
+
+            existing = (
+                db.query(GenerationPrompt)
+                .filter(
+                    GenerationPrompt.model_id == model_id,
+                    GenerationPrompt.brick_id == brick_id,
+                )
+                .first()
+            )
+            if existing is None:
+                db.add(GenerationPrompt(
+                    model_id=model_id,
+                    brick_id=brick_id,
+                    prompt_id=active.id,
+                ))
+                active.usage_count = (active.usage_count or 0) + 1
+            else:
+                # Re-run du pipeline → on écrase mais sans incrémenter
+                # (sinon le compteur explose à chaque regen).
+                existing.prompt_id = active.id
+
+            db.commit()
+            return active.id
     except Exception as exc:
-        logger.warning("get_prompt_override(%s): DB read failed (%s)", brick_id, exc)
-        return ""
+        logger.warning("track_prompt_use(%d, %s) failed: %s", model_id, brick_id, exc)
+        return None
 
 
-def get_effective_prompt(brick_id: str) -> str:
-    """System prompt actuel pour une brique : override si défini, sinon défaut."""
-    from services.prompt_registry import get_default
+def update_prompt_avg_score_for_model(model_id: int, score: float) -> None:
+    """Moyenne mobile : `avg_score` de chaque prompt utilisé par ce model.
 
-    override = get_prompt_override(brick_id).strip()
-    return override if override else get_default(brick_id)
+    Formule : new_avg = old_avg * (n-1)/n + score * 1/n
+    avec n = usage_count actuel (déjà incrémenté par `track_prompt_use`).
+    """
+    try:
+        from database import SessionLocal
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(GenerationPrompt)
+                .filter(GenerationPrompt.model_id == model_id)
+                .all()
+            )
+            for gp in rows:
+                p = db.get(Prompt, gp.prompt_id)
+                if p is None or (p.usage_count or 0) <= 0:
+                    continue
+                n = float(p.usage_count)
+                old = float(p.avg_score) if p.avg_score is not None else float(score)
+                p.avg_score = round(old * (n - 1) / n + score / n, 2)
+            db.commit()
+    except Exception as exc:
+        logger.warning("update_prompt_avg_score_for_model(%d, %s) failed: %s",
+                       model_id, score, exc)
 
 
 def get_setting(db: Session, key: str, fallback: str = "") -> str:

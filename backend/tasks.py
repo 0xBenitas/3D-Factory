@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
 
+import app_settings
 import config
 import costs
 from database import SessionLocal
@@ -42,7 +43,7 @@ from image_engines.base import (
     NON_RETRYABLE as IMAGE_NON_RETRYABLE,
     RETRYABLE as IMAGE_RETRYABLE,
 )
-from models import Export, Model
+from models import BatchItem, BatchJob, Export, Model, Recipe
 from services import mesh_repair, packager, prompt_optimizer, quality_scorer, screenshot, seo_gen
 from templates import get_template
 
@@ -227,22 +228,29 @@ async def _run_pipeline_inner(
                 model_id, engine_name, input_type, bool(prompt_override))
 
     # ----- Étape 1 : PROMPT -------------------------------------------------
+    detected_category: str | None = None
     if prompt_override:
         # Regenerate avec prompt édité : on saute l'optimisation et
         # on utilise directement la version fournie par l'utilisateur.
+        # Pas de catégorie détectable depuis un override brut — garde
+        # celle déjà persistée (récupérée plus bas).
         optimized = prompt_override[:600]
+        with SessionLocal() as db:
+            existing = db.get(Model, model_id)
+            if existing and existing.category:
+                detected_category = existing.category
     else:
         _update_model(model_id, pipeline_status="prompt")
         try:
             if input_type == "image" and input_image_path:
-                optimized = await retry_async(
+                opt = await retry_async(
                     prompt_optimizer.optimize_from_image,
                     input_image_path, engine_name,
                     retry_on=(prompt_optimizer.PromptOptimizerError,),
                     non_retryable=prompt_optimizer.NON_RETRYABLE,
                 )
             else:
-                optimized = await retry_async(
+                opt = await retry_async(
                     prompt_optimizer.optimize_from_text,
                     input_text or "", engine_name,
                     retry_on=(prompt_optimizer.PromptOptimizerError,),
@@ -251,8 +259,13 @@ async def _run_pipeline_inner(
         except Exception as exc:
             _fail(model_id, f"Prompt optimization failed: {exc}")
             return
+        optimized = opt.text
+        detected_category = opt.category
         _add_eur_cost(model_id, costs.PROMPT_OPTIMIZE_EUR)
-    _update_model(model_id, optimized_prompt=optimized)
+        # Traçabilité (Phase 1.5) : enregistre quel preset a servi.
+        brick_used = "prompt_optimizer_image" if (input_type == "image" and input_image_path) else "prompt_optimizer_text"
+        app_settings.track_prompt_use(model_id, brick_used)
+    _update_model(model_id, optimized_prompt=optimized, category=detected_category)
 
     # Vérif annulation avant de démarrer une étape coûteuse.
     if _is_cancel_requested(model_id):
@@ -375,10 +388,12 @@ async def _run_repair_and_score(
     glb_path: str,
     model_dir: "Path",
     object_desc: str,
+    repair_mode: str = "auto",
 ) -> None:
     """Étapes 3 + 4 (REPAIR + SCORE) + transition "pending".
 
     Extrait pour être partagé entre run_pipeline et run_remesh_pipeline.
+    `repair_mode` est passé tel quel à `mesh_repair.analyze_and_repair`.
     """
     if _is_cancel_requested(model_id):
         raise CancelledByUser("cancelled before repair")
@@ -387,7 +402,7 @@ async def _run_repair_and_score(
     try:
         # CPU-bound → thread pour ne pas bloquer la loop ni le semaphore.
         repair_result = await asyncio.to_thread(
-            mesh_repair.analyze_and_repair, glb_path, stl_path
+            mesh_repair.analyze_and_repair, glb_path, stl_path, repair_mode
         )
     except mesh_repair.MeshRepairError as exc:
         _fail(model_id, f"Mesh repair failed: {exc}")
@@ -416,9 +431,12 @@ async def _run_repair_and_score(
         logger.warning("Pipeline #%d: thumbnail skipped: %s", model_id, exc)
 
     _update_model(model_id, pipeline_status="scoring")
+    with SessionLocal() as db:
+        m = db.get(Model, model_id)
+        category = m.category if m else None
     try:
         score_result = await quality_scorer.score_mesh(
-            repair_result["mesh_metrics"], object_desc
+            repair_result["mesh_metrics"], object_desc, category=category,
         )
     except Exception as exc:
         logger.warning("Pipeline #%d: scoring crashed: %s", model_id, exc)
@@ -434,6 +452,10 @@ async def _run_repair_and_score(
     )
     if score_result.score is not None:
         _add_eur_cost(model_id, costs.SCORING_EUR)
+        # Traçabilité (Phase 1.5) : preset scorer + maj moyenne mobile sur
+        # tous les presets utilisés dans cette génération.
+        app_settings.track_prompt_use(model_id, "quality_scorer")
+        app_settings.update_prompt_avg_score_for_model(model_id, score_result.score)
 
     _update_model(model_id, pipeline_status="pending")
     logger.info("Pipeline #%d DONE (status=pending, score=%s)",
@@ -678,6 +700,45 @@ async def run_remesh_guarded(model_id: int, target_polycount: int) -> None:
         await _release(model_id)
 
 
+async def run_repair_only(model_id: int, mode: str) -> None:
+    """Re-rejoue REPAIR (avec mode) + SCORE sur le glb existant.
+
+    Pas d'appel API externe (Meshy/Tripo) — c'est du CPU local.
+    Utilisé par `POST /api/models/{id}/repair` pour permettre à l'utilisateur
+    de tester un mode de repair différent sans régénérer le modèle.
+    """
+    async with PIPELINE_SEMAPHORE:
+        try:
+            with SessionLocal() as db:
+                m = db.get(Model, model_id)
+                if m is None or not m.glb_path:
+                    logger.error("Repair #%d: model missing or no glb_path", model_id)
+                    return
+                glb_path = m.glb_path
+                input_text = m.input_text
+            model_dir = config.DATA_DIR / "models" / str(model_id)
+            await _run_repair_and_score(
+                model_id, glb_path, model_dir,
+                object_desc=input_text or "(repair-only)",
+                repair_mode=mode,
+            )
+        except CancelledByUser:
+            _cancelled(model_id)
+        except Exception as exc:
+            _fail(model_id, f"Unhandled repair error: {exc}")
+            logger.exception("Repair #%d crashed", model_id)
+
+
+async def run_repair_only_guarded(model_id: int, mode: str) -> None:
+    """Lance `run_repair_only` avec anti-doublon sur model_id."""
+    if not await _acquire(model_id):
+        return
+    try:
+        await run_repair_only(model_id, mode)
+    finally:
+        await _release(model_id)
+
+
 async def run_export_guarded(model_id: int, template_name: str) -> None:
     """Lance `run_export_pipeline` avec anti-doublon sur model_id."""
     if not await _acquire(model_id):
@@ -686,6 +747,171 @@ async def run_export_guarded(model_id: int, template_name: str) -> None:
         await run_export_pipeline(model_id, template_name)
     finally:
         await _release(model_id)
+
+
+# --------------------------------------------------------------------------- #
+# Batch (Phase 1.9)
+# --------------------------------------------------------------------------- #
+
+async def run_batch(batch_id: int) -> None:
+    """Worker batch séquentiel : crée 1 Model par item, await le pipeline,
+    incrémente done/failed, stoppe si cancel ou budget atteint.
+
+    Pas de parallélisme — chaque item attend la fin du précédent. C'est
+    voulu (G5 RAM 4GB VPS, rate limits Meshy/Tripo).
+    """
+    from datetime import datetime, timezone
+
+    logger.info("Batch #%d start", batch_id)
+    with SessionLocal() as db:
+        job = db.get(BatchJob, batch_id)
+        if job is None:
+            logger.error("Batch #%d not found", batch_id)
+            return
+        if job.status not in ("pending",):
+            logger.warning("Batch #%d already started (status=%s), skipping",
+                           batch_id, job.status)
+            return
+        recipe = db.get(Recipe, job.recipe_id) if job.recipe_id else None
+        if recipe is None:
+            job.status = "failed"
+            job.error = "Recipe missing or deleted"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            logger.error("Batch #%d: recipe missing", batch_id)
+            return
+
+        engine_name = recipe.engine
+        image_engine_name = recipe.image_engine
+        recipe_category = recipe.category
+        max_budget = float(job.max_budget_eur) if job.max_budget_eur else None
+
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        db.commit()
+
+        items = (
+            db.query(BatchItem)
+            .filter(BatchItem.batch_id == batch_id)
+            .order_by(BatchItem.position.asc())
+            .all()
+        )
+        item_ids = [i.id for i in items]
+
+    final_status = "done"
+    for item_id in item_ids:
+        # Re-read job state for cancel + spent_eur (autres process peuvent
+        # incrémenter cost_eur_estimate via le pipeline en parallèle).
+        with SessionLocal() as db:
+            job = db.get(BatchJob, batch_id)
+            if job is None:
+                logger.error("Batch #%d disappeared mid-run", batch_id)
+                return
+            if job.cancel_requested:
+                final_status = "cancelled"
+                break
+            current_spent = _batch_spent_eur(db, batch_id)
+            job.spent_eur = current_spent
+            db.commit()
+            if max_budget is not None and current_spent >= max_budget:
+                logger.warning(
+                    "Batch #%d: budget exceeded (%.2f >= %.2f), stopping",
+                    batch_id, current_spent, max_budget,
+                )
+                final_status = "budget_exceeded"
+                break
+
+        # Crée le Model pour cet item
+        with SessionLocal() as db:
+            item = db.get(BatchItem, item_id)
+            if item is None:
+                continue
+            model = Model(
+                input_type="text",
+                input_text=item.prompt,
+                engine=engine_name,
+                image_engine=image_engine_name,
+                pipeline_status="prompt",
+                validation="pending",
+                category=recipe_category,
+            )
+            db.add(model)
+            db.commit()
+            db.refresh(model)
+            item.model_id = model.id
+            item.status = "running"
+            item.started_at = datetime.now(timezone.utc)
+            db.commit()
+            model_id = model.id
+
+        # Lance le pipeline et attend la fin (sériel). `run_pipeline_guarded`
+        # awaits `run_pipeline` qui termine quand le modèle est en pending/failed.
+        try:
+            await run_pipeline_guarded(model_id)
+        except Exception as exc:
+            logger.exception("Batch #%d item #%d: unhandled crash", batch_id, item_id)
+            with SessionLocal() as db:
+                item = db.get(BatchItem, item_id)
+                if item is not None:
+                    item.status = "failed"
+                    item.error = str(exc)[:1000]
+                    item.finished_at = datetime.now(timezone.utc)
+                job = db.get(BatchJob, batch_id)
+                if job is not None:
+                    job.failed = (job.failed or 0) + 1
+                db.commit()
+            continue
+
+        # Lit l'état final du modèle pour décider done/failed
+        with SessionLocal() as db:
+            item = db.get(BatchItem, item_id)
+            m = db.get(Model, model_id) if item else None
+            if item is None or m is None:
+                continue
+            if m.pipeline_status in ("pending", "done"):
+                item.status = "done"
+                job = db.get(BatchJob, batch_id)
+                if job is not None:
+                    job.done = (job.done or 0) + 1
+            else:
+                item.status = "failed"
+                item.error = (m.pipeline_error or "Unknown failure")[:1000]
+                job = db.get(BatchJob, batch_id)
+                if job is not None:
+                    job.failed = (job.failed or 0) + 1
+            item.finished_at = datetime.now(timezone.utc)
+            db.commit()
+
+    # Marque les items restants en "skipped" si on a cassé tôt
+    with SessionLocal() as db:
+        pending_items = (
+            db.query(BatchItem)
+            .filter(BatchItem.batch_id == batch_id, BatchItem.status == "pending")
+            .all()
+        )
+        for it in pending_items:
+            it.status = "skipped"
+            it.finished_at = datetime.now(timezone.utc)
+        job = db.get(BatchJob, batch_id)
+        if job is not None:
+            job.status = final_status
+            job.spent_eur = _batch_spent_eur(db, batch_id)
+            job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+    logger.info("Batch #%d finished (status=%s)", batch_id, final_status)
+
+
+def _batch_spent_eur(db: SessionLocal, batch_id: int) -> float:
+    """Somme des cost_eur_estimate des Models liés au batch (via batch_items)."""
+    from sqlalchemy import func
+
+    return float(
+        db.query(func.coalesce(func.sum(Model.cost_eur_estimate), 0.0))
+        .join(BatchItem, BatchItem.model_id == Model.id)
+        .filter(BatchItem.batch_id == batch_id)
+        .scalar()
+        or 0.0
+    )
 
 
 async def _acquire(model_id: int) -> bool:

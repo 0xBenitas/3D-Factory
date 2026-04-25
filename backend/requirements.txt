@@ -12,5 +12,3 @@ networkx
 rtree
 python-multipart
 apscheduler
-bcrypt
-PyJWT

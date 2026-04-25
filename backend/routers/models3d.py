@@ -25,7 +25,8 @@ from app_settings import check_budget_or_raise
 from config import resolve_under_data_dir
 from database import get_db
 from models import Model
-from tasks import run_pipeline_guarded, run_remesh_guarded
+from services import regen_smart as regen_smart_service
+from tasks import run_pipeline_guarded, run_remesh_guarded, run_repair_only_guarded
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class ModelSummary(BaseModel):
     pipeline_status: str
     qc_score: float | None
     cost_credits: int
+    category: str | None
     created_at: str
 
 
@@ -84,6 +86,22 @@ class RemeshRequest(BaseModel):
     target_polycount: int = Field(default=30000, ge=500, le=200000)
 
 
+RepairMode = Literal["auto", "normalize", "fill_holes", "hard"]
+
+
+class RepairRequest(BaseModel):
+    mode: RepairMode = "auto"
+
+
+class RegenSmartSuggestion(BaseModel):
+    model_id: int
+    original_prompt: str
+    suggested_prompt: str
+    rationale: str
+    category: str | None
+    qc_score: float | None
+
+
 class ActionResponse(BaseModel):
     ok: bool = True
     model_id: int
@@ -103,6 +121,7 @@ def _to_summary(m: Model) -> ModelSummary:
         pipeline_status=m.pipeline_status,
         qc_score=m.qc_score,
         cost_credits=m.cost_credits or 0,
+        category=m.category,
         created_at=m.created_at.isoformat() if m.created_at else "",
     )
 
@@ -374,3 +393,83 @@ def remesh_model(
     logger.info("Model #%d remesh scheduled (target_polycount=%d)",
                 model_id, payload.target_polycount)
     return ActionResponse(model_id=model_id)
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/models/{id}/repair
+# --------------------------------------------------------------------------- #
+
+@router.post("/{model_id}/repair", response_model=ActionResponse)
+def repair_model(
+    model_id: int,
+    payload: RepairRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> ActionResponse:
+    """Rejoue le repair (et le scoring) sur le glb existant, sans régénérer.
+
+    Coût zéro côté API externe — c'est du CPU local (trimesh + pymeshfix).
+    Utile pour tester un mode différent (`normalize`/`fill_holes`/`hard`)
+    si le résultat `auto` ne convient pas.
+    """
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    if not m.glb_path:
+        raise HTTPException(400, "Cannot repair: no glb_path (model never generated)")
+    if m.pipeline_status in ("prompt", "generating", "repairing", "scoring", "photos", "packing"):
+        raise HTTPException(409, f"Pipeline already running (status='{m.pipeline_status}')")
+
+    # Pas de check_budget ici : aucun appel API externe.
+
+    m.pipeline_status = "repairing"
+    m.pipeline_error = None
+    m.qc_score = None
+    m.qc_details = None
+    m.mesh_metrics = None
+    m.repair_log = None
+    db.commit()
+
+    background_tasks.add_task(run_repair_only_guarded, model_id, payload.mode)
+    logger.info("Model #%d repair scheduled (mode=%s)", model_id, payload.mode)
+    return ActionResponse(model_id=model_id)
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/models/{id}/regen-smart-suggest
+# --------------------------------------------------------------------------- #
+
+@router.post("/{model_id}/regen-smart-suggest", response_model=RegenSmartSuggestion)
+async def suggest_smart_regen(
+    model_id: int,
+    db: Session = Depends(get_db),
+) -> RegenSmartSuggestion:
+    """Appelle Claude pour proposer un prompt ajusté à partir du score
+    détaillé. **Ne déclenche pas la regénération** — le frontend pré-remplit
+    le panneau Regénérer avec la suggestion, l'utilisateur valide.
+    """
+    m = db.get(Model, model_id)
+    if m is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    if not m.optimized_prompt:
+        raise HTTPException(400, "Cannot suggest regen: no optimized_prompt on this model")
+    if m.qc_score is None:
+        raise HTTPException(400, "Cannot suggest regen: no qc_score yet (run scoring first)")
+
+    suggestion = await regen_smart_service.suggest_regen(
+        original_prompt=m.optimized_prompt,
+        category=m.category,
+        qc_score=m.qc_score,
+        qc_details=m.qc_details,
+    )
+    if suggestion is None:
+        raise HTTPException(502, "Claude could not produce a suggestion (see backend logs)")
+
+    return RegenSmartSuggestion(
+        model_id=model_id,
+        original_prompt=m.optimized_prompt,
+        suggested_prompt=suggestion.prompt,
+        rationale=suggestion.rationale,
+        category=m.category,
+        qc_score=m.qc_score,
+    )

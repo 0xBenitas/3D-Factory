@@ -3,8 +3,11 @@
 - Texte → Claude Sonnet reformule en prompt 3D imprimable.
 - Image → Claude Vision décrit la géométrie.
 
-System prompts verbatim depuis SPECS §1.1 et §1.2. Modèle : voir
-CLAUDE_MODEL. Limite stricte : 600 caractères (contrainte Meshy).
+Depuis Phase 1.4 (2026-04-25), Claude renvoie en plus une catégorie
+("Figurine"/"Fonctionnel"/"Déco") qui pilote les pondérations du scorer
+aval. Format de sortie attendu : JSON `{"prompt": "...", "category": "..."}`.
+Le parser tolère aussi un retour en texte brut (override legacy d'un
+utilisateur qui n'a pas migré son prompt) — dans ce cas `category=None`.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
@@ -24,6 +28,49 @@ logger = logging.getLogger(__name__)
 
 MAX_PROMPT_CHARS = 600   # Limite Meshy (SPECS §1.1).
 MAX_TOKENS_REPLY = 400
+
+ALLOWED_CATEGORIES: frozenset[str] = frozenset({"Figurine", "Fonctionnel", "Déco"})
+
+
+@dataclass(frozen=True)
+class OptimizedPrompt:
+    """Sortie de `optimize_from_text` / `optimize_from_image`.
+
+    `category=None` quand l'override legacy de l'utilisateur ne renvoie
+    pas le JSON attendu — on continue le pipeline avec les poids par
+    défaut côté scorer.
+    """
+
+    text: str
+    category: str | None
+
+
+def _parse_optimizer_reply(raw: str) -> OptimizedPrompt:
+    """Tente de parser le JSON `{prompt, category}`. Fallback : texte brut."""
+    raw = (raw or "").strip()
+    if not raw:
+        raise PromptOptimizerError("Claude returned empty prompt (possibly filtered)")
+
+    data = anthropic_helpers.parse_json_tolerant(raw)
+    if isinstance(data, dict) and "prompt" in data:
+        prompt_field = str(data.get("prompt") or "").strip()
+        cat_field = data.get("category")
+        category = (
+            cat_field if isinstance(cat_field, str) and cat_field in ALLOWED_CATEGORIES
+            else None
+        )
+        if prompt_field:
+            return OptimizedPrompt(
+                text=anthropic_helpers.truncate_smart(prompt_field, MAX_PROMPT_CHARS),
+                category=category,
+            )
+        # JSON présent mais "prompt" vide → on retombe sur le brut
+
+    # Legacy : override custom qui ne renvoie pas le JSON
+    return OptimizedPrompt(
+        text=anthropic_helpers.truncate_smart(raw, MAX_PROMPT_CHARS),
+        category=None,
+    )
 
 # Défauts verbatim SPECS §1.1 / §1.2 : voir services/prompt_registry.py
 # (briques `prompt_optimizer_text` et `prompt_optimizer_image`).
@@ -59,7 +106,7 @@ def _wrap(exc: anthropic.APIError, context: str) -> PromptOptimizerError:
     )
 
 
-async def optimize_from_text(user_input: str, engine_name: str) -> str:
+async def optimize_from_text(user_input: str, engine_name: str) -> OptimizedPrompt:
     """Optimise un prompt texte pour le moteur cible.
 
     Lève `PromptOptimizerError` si Claude refuse ou renvoie du vide.
@@ -77,18 +124,15 @@ async def optimize_from_text(user_input: str, engine_name: str) -> str:
     except anthropic.APIError as exc:
         raise _wrap(exc, "optimize_from_text") from exc
 
-    result = anthropic_helpers.extract_text(message)
-    if not result:
-        raise PromptOptimizerError("Claude returned empty prompt (possibly filtered)")
-    truncated = anthropic_helpers.truncate_smart(result, MAX_PROMPT_CHARS)
+    result = _parse_optimizer_reply(anthropic_helpers.extract_text(message))
     logger.info(
-        "Prompt optimized (text): %d→%d chars, engine=%s",
-        len(user_input), len(truncated), engine_name,
+        "Prompt optimized (text): %d→%d chars, engine=%s, category=%s",
+        len(user_input), len(result.text), engine_name, result.category,
     )
-    return truncated
+    return result
 
 
-async def optimize_from_image(image_path: str, engine_name: str) -> str:
+async def optimize_from_image(image_path: str, engine_name: str) -> OptimizedPrompt:
     """Optimise un prompt à partir d'une photo uploadée (Claude Vision)."""
     p = Path(image_path)
     if not p.is_file():
@@ -130,12 +174,9 @@ async def optimize_from_image(image_path: str, engine_name: str) -> str:
     except anthropic.APIError as exc:
         raise _wrap(exc, "optimize_from_image") from exc
 
-    result = anthropic_helpers.extract_text(message)
-    if not result:
-        raise PromptOptimizerError("Claude returned empty prompt (possibly filtered)")
-    truncated = anthropic_helpers.truncate_smart(result, MAX_PROMPT_CHARS)
+    result = _parse_optimizer_reply(anthropic_helpers.extract_text(message))
     logger.info(
-        "Prompt optimized (image): %s → %d chars, engine=%s",
-        p.name, len(truncated), engine_name,
+        "Prompt optimized (image): %s → %d chars, engine=%s, category=%s",
+        p.name, len(result.text), engine_name, result.category,
     )
-    return truncated
+    return result

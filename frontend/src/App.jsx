@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
+import BatchPage from './pages/BatchPage.jsx'
 import CreatePage from './pages/CreatePage.jsx'
 import ModelsPage from './pages/ModelsPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
@@ -13,6 +14,7 @@ export default function App() {
         <h1 className="app-title">3D Print Factory</h1>
         <nav className="app-nav">
           <NavLink to="/" end className={navLinkClass}>Create</NavLink>
+          <NavLink to="/batch" className={navLinkClass}>Batch</NavLink>
           <NavLink to="/models" className={navLinkClass}>Models</NavLink>
           <NavLink to="/settings" className={navLinkClass}>Settings</NavLink>
         </nav>
@@ -21,6 +23,7 @@ export default function App() {
       <main className="app-main">
         <Routes>
           <Route path="/" element={<CreatePage />} />
+          <Route path="/batch" element={<BatchPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

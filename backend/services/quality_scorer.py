@@ -1,13 +1,14 @@
 """Étape 4 du pipeline : scoring qualité via Claude API.
 
 Envoie les `mesh_metrics` brutes à Claude (texte, pas vision) et récupère
-un score /10 + critères détaillés + summary.
-
-System prompt : verbatim SPECS §1.3.
+un score per-criterion (0-10) + summary. Depuis Phase 1.4 (2026-04-25),
+le score global est calculé côté Python via `scoring_profiles` à partir
+de la `category` détectée par l'optimizer — Claude reste focalisé sur le
+scoring par critère.
 
 **Important** : le score est informatif. Si Claude échoue, on retourne
 `None` et le pipeline continue — le modèle arrive en "pending" sans
-score, les métriques brutes restent visibles (cf. SPECS §5).
+score, les métriques brutes restent visibles.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import anthropic
 
 import config
 from app_settings import get_effective_prompt
-from services import anthropic_helpers
+from services import anthropic_helpers, scoring_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,13 @@ class QualityScoreResult:
 async def score_mesh(
     mesh_metrics: dict,
     object_description: str,
+    category: str | None = None,
 ) -> QualityScoreResult:
     """Appelle Claude pour scorer le mesh. Ne lève jamais — retourne un
     résultat vide en cas d'échec (le pipeline doit continuer).
+
+    `category` (Figurine/Fonctionnel/Déco) pilote les pondérations. None
+    → poids historiques (cf. `scoring_profiles.DEFAULT_WEIGHTS`).
     """
     key = config.get_api_key("anthropic")
     if not key:
@@ -58,6 +63,7 @@ async def score_mesh(
 
     user_msg = (
         f"Type d'objet demandé : {object_description}\n"
+        f"Catégorie : {category or 'inconnue'}\n"
         f"Métriques mesh :\n{json.dumps(mesh_metrics, indent=2)}"
     )
     client = anthropic.AsyncAnthropic(api_key=key)
@@ -79,14 +85,21 @@ async def score_mesh(
         logger.warning("QualityScorer: unparseable response, skipping")
         return QualityScoreResult()
 
-    try:
-        score = float(data.get("score"))
-    except (TypeError, ValueError):
-        logger.warning("QualityScorer: missing/invalid 'score' field")
-        return QualityScoreResult()
+    criteria = data.get("criteria") or {}
+
+    # Score global = moyenne pondérée par profil (Phase 1.4). Fallback
+    # au champ `score` renvoyé par Claude si on n'a pas de critères
+    # exploitables (override legacy qui ne suit plus le format JSON).
+    score = scoring_profiles.compute_weighted_score(criteria, category)
+    if score is None:
+        try:
+            score = float(data.get("score"))
+        except (TypeError, ValueError):
+            logger.warning("QualityScorer: no usable score (no criteria + no fallback)")
+            return QualityScoreResult()
 
     return QualityScoreResult(
         score=score,
-        criteria=data.get("criteria") or {},
+        criteria=criteria,
         summary=data.get("summary"),
     )

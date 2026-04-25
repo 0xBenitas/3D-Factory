@@ -31,27 +31,41 @@ class PromptBrick:
     placeholders: tuple[str, ...] = ()
 
 
-# SPECS §1.1
-_DEFAULT_OPTIMIZER_TEXT = """Tu es un expert en modélisation 3D pour l'impression. Ton rôle est de transformer une description vague en un prompt optimisé pour un générateur 3D IA.
+# Optimizer text — défaut dé-jargonisé (Phase 1.3) + détection catégorie
+# (Phase 1.4). Sortie JSON {"prompt": "...", "category": "..."}.
+_DEFAULT_OPTIMIZER_TEXT = """Tu transformes une description en un prompt court pour un générateur 3D IA (Meshy) ET tu détectes la catégorie de l'objet pour ajuster le scoring qualité aval.
 
-Règles :
-- Le prompt doit décrire UNIQUEMENT la géométrie (forme, proportions, détails structurels). JAMAIS de couleurs, textures, matériaux visuels.
-- L'objet doit être imprimable en 3D : formes solides, épaisseur minimale 1.5mm partout, pas de parties flottantes, pas de surplombs > 60° si possible.
-- Sois précis sur les proportions relatives (ex: "le pied fait 1/4 de la hauteur totale").
-- Mentionne la symétrie si applicable.
-- Limite : 600 caractères max (limite du moteur).
-- Réponds UNIQUEMENT avec le prompt optimisé, rien d'autre."""
+Règles pour le PROMPT :
+- Décris la SILHOUETTE et la STRUCTURE : forme globale, proportions relatives, détails saillants, symétrie. Pense « comment je le décrirais à quelqu'un les yeux fermés ».
+- Privilégie les formes massives et courbes douces. Évite les détails fins isolés et les pointes qui dépassent du volume principal.
+- Mentionne les proportions clés (ex: « tête = 1/3 du corps »).
+- N'inclus PAS de couleurs, matières, textures, ambiance, scène, éclairage.
+- 200-300 caractères max.
 
-# SPECS §1.2
-_DEFAULT_OPTIMIZER_IMAGE = """Tu es un expert en modélisation 3D pour l'impression. On te montre une photo d'un objet. Tu dois générer un prompt pour un générateur 3D IA qui reproduira cet objet.
+Règles pour la CATÉGORIE — choisis exactement une valeur :
+- "Figurine" : personnages, créatures, art, statuettes, sculptures, jouets décoratifs
+- "Fonctionnel" : pièces mécaniques, outils, supports techniques, prototypes utilitaires (doivent tenir une charge ou s'emboîter)
+- "Déco" : pots, vases, cache-pots, bibelots, objets décoratifs sans fonction mécanique précise
 
-Règles :
-- Décris UNIQUEMENT la géométrie : forme globale, proportions, détails structurels, symétrie.
-- JAMAIS de couleurs, textures, matériaux visuels — on imprime en monochrome.
-- L'objet doit être imprimable : formes solides, épaisseur min 1.5mm, pas de parties flottantes.
-- Si l'objet a des détails trop fins pour l'impression, simplifie-les.
-- Limite : 600 caractères max.
-- Réponds UNIQUEMENT avec le prompt optimisé, rien d'autre."""
+Réponds UNIQUEMENT en JSON valide, rien d'autre :
+{"prompt": "...", "category": "Figurine"}"""
+
+# Optimizer image — même esprit, à partir d'une photo (Claude Vision).
+_DEFAULT_OPTIMIZER_IMAGE = """Tu regardes une photo, tu génères un prompt court pour un générateur 3D IA (Meshy) qui reproduira la silhouette, ET tu détectes la catégorie pour le scoring aval.
+
+Règles pour le PROMPT :
+- Décris UNIQUEMENT la SILHOUETTE et la STRUCTURE visibles : forme globale, proportions, détails saillants, symétrie.
+- Privilégie les formes massives et courbes douces. Si la photo montre des détails très fins ou des pointes isolées, simplifie ou intègre-les au volume principal.
+- Ignore couleurs, matières, textures, fond, lumière.
+- 200-300 caractères max.
+
+Règles pour la CATÉGORIE — choisis exactement une valeur :
+- "Figurine" : personnages, créatures, art, statuettes, jouets décoratifs
+- "Fonctionnel" : pièces mécaniques, outils, supports techniques, prototypes utilitaires
+- "Déco" : pots, vases, bibelots, objets décoratifs sans fonction mécanique précise
+
+Réponds UNIQUEMENT en JSON valide :
+{"prompt": "...", "category": "Figurine"}"""
 
 # SPECS §1.3
 _DEFAULT_QUALITY_SCORER = """Tu es un expert en impression 3D FDM/SLA. On te donne les métriques brutes d'un mesh 3D. Tu dois évaluer sa qualité pour l'impression et donner un score sur 10.
@@ -144,6 +158,47 @@ Exemples par type :
 - Rangement : "3D printed desk organizer with pens and supplies, modern home office, warm natural light, lifestyle photography\""""
 
 
+# Phase 1.6 — Régénération intelligente. Few-shot par profil pour guider
+# Claude vers les ajustements pertinents (Figurine vs Fonctionnel vs Déco).
+_DEFAULT_REGEN_SMART = """Tu reçois un prompt 3D qui a produit un mesh sous-optimal et son scoring détaillé. Tu dois proposer une version ajustée du prompt qui corrige les défauts identifiés.
+
+Tu reçois :
+- Le prompt original envoyé au générateur 3D
+- La catégorie de l'objet (Figurine / Fonctionnel / Déco / inconnue)
+- Le score global et le score par critère (0-10)
+- Les notes de Claude sur chaque critère
+
+Règles d'ajustement par catégorie :
+
+**Figurine** (perso, statuette, créature, jouet décoratif) :
+- Watertight bas → ajouter "solid single piece, no internal cavities"
+- Floating parts > 1 → "fully connected silhouette, all parts attached"
+- Wall thickness faible → "thick rounded forms, no thin protrusions"
+- Overhangs forts → reformuler la pose pour qu'elle soit plus auto-supportée
+- Proportions ratées → ré-énoncer les proportions clés explicitement
+
+**Fonctionnel** (mécanique, support technique, prototype utilitaire) :
+- Wall thickness faible → "minimum 2mm walls everywhere, robust structure"
+- Overhangs forts → "self-supporting geometry, max 45° overhang"
+- Floating parts > 1 → "single rigid body, all elements fused"
+- Manifold/watertight bas → "clean closed solid, no shells or surfaces"
+- Bounding box hors-cible → préciser dimensions attendues si évident
+
+**Déco** (pot, vase, bibelot, objet décoratif) :
+- Wall thickness moyenne → "uniform 2-3mm walls, smooth surfaces"
+- Proportions → renforcer la description de l'équilibre visuel
+- Overhangs → "stable base, gravity-friendly silhouette"
+
+Règles générales :
+- Garde l'intention du prompt original (sujet, style)
+- Ajoute UNIQUEMENT ce qui répare les défauts vus dans le score
+- Reste concis : 200-350 caractères pour le prompt ajusté
+- Si le score est déjà excellent (>= 8.5), rationale "déjà bon, propose une variation mineure"
+
+Réponds UNIQUEMENT en JSON :
+{"prompt": "...prompt ajusté...", "rationale": "1-2 phrases expliquant ce que tu changes et pourquoi"}"""
+
+
 _BRICKS: tuple[PromptBrick, ...] = (
     PromptBrick(
         id="prompt_optimizer_text",
@@ -182,6 +237,12 @@ _BRICKS: tuple[PromptBrick, ...] = (
         label="Prompt photo lifestyle",
         description="Étape 7. Prompt ≤ 200 chars envoyé à Stability pour la photo produit.",
         default=_DEFAULT_SEO_LIFESTYLE,
+    ),
+    PromptBrick(
+        id="regen_smart",
+        label="Régénération intelligente",
+        description="Sur demande utilisateur. Prend le prompt original + le score détaillé et propose un prompt ajusté pour corriger les défauts.",
+        default=_DEFAULT_REGEN_SMART,
     ),
 )
 

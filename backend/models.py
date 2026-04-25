@@ -1,23 +1,13 @@
-"""Modèles SQLAlchemy — Printed.
+"""Modèles SQLAlchemy — 3D Print Factory.
 
-Séparation Request (besoin humain) / Model3D (fichier technique).
-Une request peut avoir 0, 1 ou N models3d (génération IA, upload manuel,
-re-génération…). Les utilisateurs sont identifiés par TEXT id (hex random)
-pour éviter l'énumération séquentielle qu'on aurait avec des int auto.
-
-Tables :
-- users          : comptes (employee | validator | operator | admin)
-- requests       : demandes (workflow complet avec state machine)
-- models3d       : fichiers 3D attachés à une request (ai_generated / manual_upload)
-- comments       : timeline messages + events système
-- votes          : upvote par (user, request) unique
-- library_items  : archivage des pièces validées pour réutilisation
-- settings       : key/value store (garde compat avec l'app précédente)
+Schéma legacy actif :
+- models    : modèle 3D généré (text/image-to-3d → glb → repair → stl + score)
+- exports   : export marketplace (ZIP + listing SEO) pour un modèle validé
+- settings  : key/value store (clés API, defaults, overrides prompts)
 """
 
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -31,7 +21,6 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
-    UniqueConstraint,
 )
 
 from database import Base
@@ -41,245 +30,8 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _gen_id() -> str:
-    """16 hex chars (8 bytes) — collision improbable, énumération infaisable."""
-    return secrets.token_hex(8)
-
-
-# --------------------------------------------------------------------------- #
-# Users
-# --------------------------------------------------------------------------- #
-
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String, primary_key=True, default=_gen_id)
-    email = Column(String, unique=True, nullable=False, index=True)
-    display_name = Column(String, nullable=False)
-    password_hash = Column(String, nullable=False)
-    # Rôle simple V1 (employee | validator | operator | admin). Plus tard
-    # potentiellement une vraie table roles/permissions.
-    role = Column(String, nullable=False, default="employee", index=True)
-    department = Column(String, nullable=True)
-    avatar_url = Column(String, nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
-
-
-# --------------------------------------------------------------------------- #
-# Requests (demandes)
-# --------------------------------------------------------------------------- #
-
-class Request(Base):
-    """Demande d'une pièce imprimée.
-
-    Source de vérité pour le workflow. Le fichier 3D est séparé (Model3D).
-    Tous les timestamps sont stockés en UTC.
-    """
-
-    __tablename__ = "requests"
-
-    id = Column(String, primary_key=True, default=_gen_id)
-    title = Column(String, nullable=False)
-    description = Column(Text, nullable=False)
-    author_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
-
-    # Statuts (cf. workflow.py) :
-    # draft | submitted | under_review | needs_info | approved | printing
-    # | delivered | feedback | archived | rejected | on_hold
-    status = Column(String, nullable=False, default="draft", index=True)
-    priority = Column(String, nullable=False, default="normal")   # low | normal | high | urgent
-    department = Column(String, nullable=True, index=True)
-    category = Column(String, nullable=True, index=True)
-
-    # Validation
-    assigned_to = Column(String, ForeignKey("users.id"), nullable=True, index=True)
-    review_notes = Column(Text, nullable=True)
-    rejection_reason = Column(Text, nullable=True)
-    hold_reason = Column(Text, nullable=True)
-    hold_until = Column(DateTime(timezone=True), nullable=True)
-
-    # Impression
-    print_material = Column(String, nullable=True)   # "PETG" | "PLA" | "ABS" | ...
-    print_infill = Column(Integer, nullable=True)    # % remplissage
-    print_cost_estimate = Column(Float, nullable=True)
-    print_time_estimate = Column(String, nullable=True)   # "2h40"
-
-    # Feedback terrain
-    feedback_text = Column(Text, nullable=True)
-    feedback_rating = Column(Integer, nullable=True)      # 1-5 étoiles
-    feedback_at = Column(DateTime(timezone=True), nullable=True)
-
-    # Méta dénormalisée pour tri rapide
-    vote_count = Column(Integer, nullable=False, default=0, index=True)
-    view_count = Column(Integer, nullable=False, default=0)
-
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
-    submitted_at = Column(DateTime(timezone=True), nullable=True)
-    approved_at = Column(DateTime(timezone=True), nullable=True)
-    delivered_at = Column(DateTime(timezone=True), nullable=True)
-    archived_at = Column(DateTime(timezone=True), nullable=True)
-
-
-# --------------------------------------------------------------------------- #
-# Model3D (fichiers 3D rattachés à une request)
-# --------------------------------------------------------------------------- #
-
-class Model3D(Base):
-    """Fichier 3D attaché à une request.
-
-    Une même request peut avoir plusieurs Model3D (plusieurs générations IA,
-    upload manuel en remplacement, re-modélisation par le validateur). Un
-    seul à la fois a `is_selected=True` — c'est celui qu'on imprime.
-    """
-
-    __tablename__ = "models3d"
-
-    id = Column(String, primary_key=True, default=_gen_id)
-    request_id = Column(
-        String,
-        ForeignKey("requests.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    # Provenance
-    source_type = Column(String, nullable=False)    # 'ai_generated' | 'manual_upload' | 'validator_upload'
-    uploaded_by = Column(String, ForeignKey("users.id"), nullable=True)
-
-    # Fichier
-    file_path = Column(String, nullable=True)        # chemin relatif sous /data/models/
-    file_name = Column(String, nullable=True)        # nom d'origine (pour download)
-    file_size_bytes = Column(Integer, nullable=True)
-    file_format = Column(String, nullable=True)      # 'stl' | 'obj' | 'glb' | '3mf'
-    thumbnail_path = Column(String, nullable=True)
-
-    # Génération IA (source_type='ai_generated')
-    engine = Column(String, nullable=True)           # 'meshy' | 'tripo'
-    engine_task_id = Column(String, nullable=True)   # pour remesh ultérieur
-    prompt_input = Column(Text, nullable=True)       # input utilisateur brut
-    prompt_optimized = Column(Text, nullable=True)   # prompt post-Claude
-    generation_cost_eur = Column(Float, nullable=True)
-    generation_time_s = Column(Integer, nullable=True)
-
-    # Scoring qualité (tourne sur TOUT fichier, généré ou uploadé)
-    quality_score = Column(Float, nullable=True)     # 0-10
-    is_manifold = Column(Boolean, nullable=True)
-    is_watertight = Column(Boolean, nullable=True)
-    min_thickness_mm = Column(Float, nullable=True)
-    max_overhang_deg = Column(Float, nullable=True)
-    face_count = Column(Integer, nullable=True)
-    component_count = Column(Integer, nullable=True)
-    dimensions_mm = Column(String, nullable=True)    # "150x120x80"
-    is_printable = Column(Boolean, nullable=True)    # verdict global
-    score_details = Column(JSON, nullable=True)      # mesh_metrics + qc_details
-
-    # État de l'objet
-    is_selected = Column(Boolean, nullable=False, default=False)
-    version = Column(Integer, nullable=False, default=1)
-
-    # Suivi pipeline IA (équivalent de l'ancien Model.pipeline_* pour les
-    # génération asynchrones)
-    pipeline_status = Column(String, nullable=True, index=True)     # prompt|generating|repairing|scoring|ready|failed|cancelled
-    pipeline_progress = Column(Integer, nullable=True)              # 0-100
-    pipeline_error = Column(Text, nullable=True)
-    cancel_requested = Column(Integer, nullable=False, default=0)
-
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
-
-
-# --------------------------------------------------------------------------- #
-# Comments (timeline + events)
-# --------------------------------------------------------------------------- #
-
-class Comment(Base):
-    """Entrée dans la timeline d'une request.
-
-    Couvre :
-    - les commentaires humains (`comment_type='message'`)
-    - les changements de statut générés par le workflow (`'status_change'`)
-    - les événements système (scoring done, impression lancée…) (`'system'`)
-    - les Q/A explicites (`'question'` / `'answer'`)
-    """
-
-    __tablename__ = "comments"
-
-    id = Column(String, primary_key=True, default=_gen_id)
-    request_id = Column(
-        String,
-        ForeignKey("requests.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    author_id = Column(String, ForeignKey("users.id"), nullable=False)
-    content = Column(Text, nullable=False)
-
-    # Pièce jointe optionnelle (photo, STL de référence, PDF…)
-    attachment_path = Column(String, nullable=True)
-    attachment_type = Column(String, nullable=True)   # 'image' | 'model' | 'document'
-
-    comment_type = Column(String, nullable=False, default="message")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
-
-
-# --------------------------------------------------------------------------- #
-# Votes
-# --------------------------------------------------------------------------- #
-
-class Vote(Base):
-    """Upvote sur une request. Un user ne peut voter qu'une fois par request."""
-
-    __tablename__ = "votes"
-    __table_args__ = (PrimaryKeyConstraint("user_id", "request_id"),)
-
-    user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    request_id = Column(
-        String,
-        ForeignKey("requests.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
-
-
-# --------------------------------------------------------------------------- #
-# Library (pièces archivées réutilisables)
-# --------------------------------------------------------------------------- #
-
-class LibraryItem(Base):
-    """Pièce validée archivée dans la bibliothèque pour réutilisation.
-
-    Créée automatiquement lors de la transition `archive` (workflow). Garde
-    une référence vers la request d'origine + le Model3D figé qu'on réimprimera.
-    """
-
-    __tablename__ = "library_items"
-
-    id = Column(String, primary_key=True, default=_gen_id)
-    request_id = Column(String, ForeignKey("requests.id"), nullable=False, index=True)
-    model3d_id = Column(String, ForeignKey("models3d.id"), nullable=False)
-
-    title = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    category = Column(String, nullable=True, index=True)
-    tags = Column(JSON, nullable=True)               # ["capteur", "support", "ligne3"]
-    department = Column(String, nullable=True, index=True)
-
-    reprint_count = Column(Integer, nullable=False, default=0)
-
-    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
-    created_by = Column(String, ForeignKey("users.id"), nullable=True)
-
-
-# --------------------------------------------------------------------------- #
-# Model + Export — legacy, conservés pour compat (routeurs non migrés)
-# --------------------------------------------------------------------------- #
-
 class Model(Base):
-    """Modèle 3D legacy (ancienne app). Table 'models' conservée intacte."""
+    """Modèle 3D généré par le pipeline."""
 
     __tablename__ = "models"
 
@@ -307,6 +59,9 @@ class Model(Base):
     pipeline_error = Column(Text, nullable=True)
     pipeline_progress = Column(Integer, nullable=True)
     cancel_requested = Column(Integer, nullable=False, default=0)
+    # Profil catégoriel détecté par l'optimizer (Phase 1.4) :
+    # "Figurine" | "Fonctionnel" | "Déco" | NULL pour les modèles antérieurs.
+    category = Column(String, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
 
 
@@ -332,17 +87,145 @@ class Export(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
 
-# Settings (key/value) — garde compat avec l'app précédente
-# --------------------------------------------------------------------------- #
-
 class Setting(Base):
-    """Key/value store pour config runtime (clés API, defaults, prompt instructions…).
-
-    Préservé tel quel depuis l'app précédente pour que config.get_api_key() et
-    app_settings.get_setting() continuent à fonctionner sans refacto.
-    """
+    """Key/value store : clés API, defaults runtime."""
 
     __tablename__ = "settings"
 
     key = Column(String, primary_key=True)
     value = Column(Text, nullable=False)
+
+
+class Prompt(Base):
+    """Bibliothèque versionnée des system prompts (Phase 1.5).
+
+    Un seul `is_active=True` par `brick_id` à un instant T (contrainte
+    appliquée par index partiel SQLite, cf. `_create_partial_indexes` dans
+    database.py).
+    """
+
+    __tablename__ = "prompts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    brick_id = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    # Catégorie cible pour ce preset (None = générique, applicable à tous).
+    category = Column(String, nullable=True, index=True)
+    tags = Column(JSON, nullable=True)
+    notes = Column(Text, nullable=True)
+    # is_default = True pour le preset système initial (contenu = défaut du
+    # registry au moment de la création). Sert d'ancrage pour le bouton
+    # "Reset" et empêche la suppression depuis l'API.
+    is_default = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=False, index=True)
+    usage_count = Column(Integer, nullable=False, default=0)
+    avg_score = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class GenerationPrompt(Base):
+    """Traçabilité : quel prompt a servi à quelle génération, par brique.
+
+    Un Model peut avoir plusieurs lignes (1 par brique utilisée dans le
+    pipeline : optimizer, scorer, seo_listing, etc.). PK composite
+    (model_id, brick_id) garantit l'unicité.
+    """
+
+    __tablename__ = "generation_prompts"
+    __table_args__ = (PrimaryKeyConstraint("model_id", "brick_id"),)
+
+    model_id = Column(
+        Integer,
+        ForeignKey("models.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    brick_id = Column(String, nullable=False)
+    prompt_id = Column(Integer, ForeignKey("prompts.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+
+class Recipe(Base):
+    """Recette de génération (Phase 1.8) — preset config pour InputForm + batch.
+
+    v1 minimaliste : engine + image_engine + category (hint) + notes.
+    Phase 2.13 enrichira avec prompt FK, viewer_preset_id, slicer_preset_id,
+    listing_template, etc.
+    """
+
+    __tablename__ = "recipes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False, unique=True)
+    engine = Column(String, nullable=False)
+    image_engine = Column(String, nullable=True)
+    category = Column(String, nullable=True, index=True)
+    notes = Column(Text, nullable=True)
+    usage_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class BatchJob(Base):
+    """Job batch (Phase 1.9) — N items partageant la même recette.
+
+    Statuts :
+      - "pending"          : créé, worker pas encore démarré
+      - "running"          : en cours, items en train d'être traités
+      - "done"             : tous les items terminés (peut inclure des failed)
+      - "cancelled"        : arrêté par l'utilisateur
+      - "budget_exceeded"  : stoppé parce que `spent_eur >= max_budget_eur`
+      - "failed"           : crash inattendu du worker
+    """
+
+    __tablename__ = "batch_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipe_id = Column(
+        Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    status = Column(String, nullable=False, default="pending", index=True)
+    total = Column(Integer, nullable=False, default=0)
+    done = Column(Integer, nullable=False, default=0)
+    failed = Column(Integer, nullable=False, default=0)
+    max_budget_eur = Column(Float, nullable=True)
+    spent_eur = Column(Float, nullable=False, default=0.0)
+    cancel_requested = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class BatchItem(Base):
+    """Item d'un BatchJob — 1 ligne = 1 modèle à générer.
+
+    Statuts :
+      - "pending"   : pas encore traité
+      - "running"   : pipeline en cours pour cet item
+      - "done"      : modèle généré (peut être de mauvaise qualité, ce n'est
+                       pas la même chose que approved/rejected)
+      - "failed"    : pipeline a échoué (cf. `error`)
+      - "skipped"   : sauté (cancel ou budget_exceeded avant traitement)
+    """
+
+    __tablename__ = "batch_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(
+        Integer,
+        ForeignKey("batch_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    position = Column(Integer, nullable=False)   # ordre dans le batch (0-based)
+    prompt = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="pending", index=True)
+    model_id = Column(
+        Integer, ForeignKey("models.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)

@@ -491,6 +491,71 @@ kbd {
 }
 .score-card__value { font-size: 2rem; font-weight: 700; }
 .score-card__max { font-size: 1rem; color: var(--text-muted); margin-left: 0.2rem; }
+.score-card__category {
+  display: inline-block;
+  margin-left: 0.6rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: help;
+}
+.smart-rationale {
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.6rem;
+  border-left: 3px solid var(--accent, #6cc4ff);
+  background: rgba(108, 196, 255, 0.08);
+  font-size: 0.85rem;
+  color: var(--text);
+  border-radius: 0 4px 4px 0;
+}
+
+/* ---- Batch page ---- */
+.batch-page { max-width: 900px; margin: 0 auto; }
+.batch-form {
+  display: flex; flex-direction: column; gap: 0.8rem;
+  background: var(--surface-hi); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem;
+}
+.batch-list { list-style: none; padding: 0; margin: 0; }
+.batch-list__item {
+  background: var(--surface-hi); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.4rem;
+  cursor: pointer;
+}
+.batch-list__item:hover { background: var(--surface); }
+.batch-list__item--active { border-color: var(--accent, #6cc4ff); }
+.batch-list__row {
+  display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+.batch-status {
+  display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.batch-status--pending { color: var(--text-muted); }
+.batch-status--running { color: var(--accent, #6cc4ff); border-color: currentColor; }
+.batch-status--done    { color: var(--good, #4ade80); border-color: currentColor; }
+.batch-status--failed,
+.batch-status--budget_exceeded { color: var(--bad, #f87171); border-color: currentColor; }
+.batch-status--cancelled,
+.batch-status--skipped { color: var(--text-muted); }
+.batch-detail { margin-top: 1rem; }
+.batch-items { list-style: none; padding: 0; margin: 0.4rem 0; }
+.batch-item {
+  display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;
+  padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.batch-item__pos { font-family: ui-monospace, monospace; color: var(--text-muted); }
+.batch-item__prompt {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .score-bar {
   height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden;
 }

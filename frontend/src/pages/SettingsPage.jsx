@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  activatePrompt,
+  createPrompt,
+  deletePrompt,
   getSettings,
   getStats,
   listEngines,
   listImageEngines,
+  listPromptLibrary,
   listPrompts,
   listTemplates,
   resetPrompt,
@@ -486,15 +490,36 @@ function PromptsSection() {
 }
 
 function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError }) {
-  const [draft, setDraft] = useState(brick.override)
+  const [draft, setDraft] = useState(brick.override || '')
   const [showDefault, setShowDefault] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [presets, setPresets] = useState(null)
+  const [presetsLoaded, setPresetsLoaded] = useState(false)
 
+  // Re-sync le draft à chaque changement d'override actif (after activate/save).
   useEffect(() => {
-    setDraft(brick.override)
-  }, [brick.override])
+    setDraft(brick.override || '')
+  }, [brick.override, brick.active_prompt_id])
 
-  const changed = draft !== brick.override
+  // Charge la biblio à la première ouverture du panneau.
+  useEffect(() => {
+    if (open && !presetsLoaded) {
+      listPromptLibrary({ brickId: brick.id })
+        .then((rows) => setPresets(rows))
+        .catch((exc) => onError(exc.detail || exc.message))
+        .finally(() => setPresetsLoaded(true))
+    }
+  }, [open, presetsLoaded, brick.id, onError])
+
+  const refreshPresets = async () => {
+    try {
+      setPresets(await listPromptLibrary({ brickId: brick.id }))
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    }
+  }
+
+  const changed = draft !== (brick.override || '')
   const over = draft.length > maxLength
 
   const save = async () => {
@@ -503,6 +528,64 @@ function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError })
     try {
       const updated = await updatePrompt(brick.id, draft)
       onUpdate(updated)
+      await refreshPresets()
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveAsNew = async () => {
+    const name = prompt('Nom du nouveau preset ?')?.trim()
+    if (!name) return
+    setBusy(true)
+    onError(null)
+    try {
+      await createPrompt({
+        brick_id: brick.id,
+        name,
+        content: draft || brick.default,
+        activate: true,
+      })
+      // Recharger la brick (active_prompt_id a changé) via le parent.
+      const fresh = await listPrompts()
+      const updated = (fresh.bricks || []).find((b) => b.id === brick.id)
+      if (updated) onUpdate(updated)
+      await refreshPresets()
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const activate = async (id) => {
+    setBusy(true)
+    onError(null)
+    try {
+      await activatePrompt(id)
+      const fresh = await listPrompts()
+      const updated = (fresh.bricks || []).find((b) => b.id === brick.id)
+      if (updated) onUpdate(updated)
+      await refreshPresets()
+    } catch (exc) {
+      onError(exc.detail || exc.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removePreset = async (p) => {
+    if (!confirm(`Supprimer le preset "${p.name}" ?`)) return
+    setBusy(true)
+    onError(null)
+    try {
+      await deletePrompt(p.id)
+      const fresh = await listPrompts()
+      const updated = (fresh.bricks || []).find((b) => b.id === brick.id)
+      if (updated) onUpdate(updated)
+      await refreshPresets()
     } catch (exc) {
       onError(exc.detail || exc.message)
     } finally {
@@ -511,18 +594,22 @@ function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError })
   }
 
   const reset = async () => {
-    if (!confirm(`Restaurer le prompt par défaut de "${brick.label}" ?`)) return
+    if (!confirm(`Réactiver le preset Default de "${brick.label}" ?`)) return
     setBusy(true)
     onError(null)
     try {
       const updated = await resetPrompt(brick.id)
       onUpdate(updated)
+      await refreshPresets()
     } catch (exc) {
       onError(exc.detail || exc.message)
     } finally {
       setBusy(false)
     }
   }
+
+  const activePreset = presets?.find((p) => p.id === brick.active_prompt_id)
+  const activeLabel = activePreset?.name || (brick.is_custom ? 'personnalisé' : 'Default')
 
   return (
     <div className="settings-card" style={{ padding: 12 }}>
@@ -540,11 +627,9 @@ function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError })
       >
         <div>
           <strong>{brick.label}</strong>
-          {brick.is_custom && (
-            <span className="muted" style={{ marginLeft: 8, fontSize: '0.8em' }}>
-              • personnalisé
-            </span>
-          )}
+          <span className="muted" style={{ marginLeft: 8, fontSize: '0.8em' }}>
+            • actif : {activeLabel}
+          </span>
         </div>
         <span className="muted">{open ? '▴' : '▾'}</span>
       </button>
@@ -552,6 +637,36 @@ function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError })
       {open && (
         <div style={{ marginTop: 10 }}>
           <p className="muted" style={{ marginTop: 0 }}>{brick.description}</p>
+
+          {presets && presets.length > 1 && (
+            <div className="settings-card__inline" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+              <span className="muted" style={{ fontSize: '0.8em' }}>Presets :</span>
+              {presets.map((p) => (
+                <span key={p.id} className="settings-card__inline" style={{ gap: 4 }}>
+                  <button
+                    className={`btn ${p.is_active ? 'btn--active' : ''}`}
+                    style={{ fontSize: '0.8em', padding: '0.2rem 0.5rem' }}
+                    onClick={() => !p.is_active && activate(p.id)}
+                    disabled={busy || p.is_active}
+                    title={p.notes || ''}
+                  >
+                    {p.name}{p.usage_count > 0 ? ` (${p.usage_count}× ${p.avg_score ?? '—'}/10)` : ''}
+                  </button>
+                  {!p.is_default && (
+                    <button
+                      className="btn btn--ghost"
+                      style={{ fontSize: '0.7em', padding: '0.2rem 0.4rem' }}
+                      onClick={() => removePreset(p)}
+                      disabled={busy || p.is_active}
+                      title="Supprimer ce preset"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
 
           {brick.placeholders.length > 0 && (
             <p className="muted" style={{ marginTop: 0 }}>
@@ -599,9 +714,18 @@ function PromptBrickRow({ brick, maxLength, open, onToggle, onUpdate, onError })
                 </button>
               )}
               <button
+                className="btn"
+                onClick={saveAsNew}
+                disabled={busy || over || !draft.trim()}
+                title="Crée un nouveau preset à partir du draft courant et l'active"
+              >
+                ＋ Nouveau preset
+              </button>
+              <button
                 className="btn btn--primary"
                 onClick={save}
                 disabled={busy || !changed || over}
+                title="Met à jour le preset actif (ou crée un User custom si l'actif est Default)"
               >
                 Enregistrer
               </button>

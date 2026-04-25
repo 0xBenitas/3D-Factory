@@ -371,6 +371,7 @@ export default function ModelsPage() {
                   score={detail.qc_score}
                   meshMetrics={detail.mesh_metrics}
                   qcDetails={detail.qc_details}
+                  category={detail.category}
                 />
               )}
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import EngineSelector from './EngineSelector.jsx'
-import { getCostHints } from '../api.js'
+import { getCostHints, incrementRecipeUsage, listRecipes } from '../api.js'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const ACCEPTED_MIMES = ['image/jpeg', 'image/png']
@@ -25,6 +25,9 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
   const [engine, setEngine] = useState('')
   const [error, setError] = useState(null)
   const [costHints, setCostHints] = useState(null)
+  const [recipes, setRecipes] = useState([])
+  const [recipeId, setRecipeId] = useState('')
+  const [imageEngineFromRecipe, setImageEngineFromRecipe] = useState(null)
 
   // Libère l'URL object lors du changement d'image.
   useEffect(() => {
@@ -46,6 +49,28 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
       .catch(() => { /* fallbacks utilisés */ })
     return () => { cancelled = true }
   }, [])
+
+  // Charge la liste des recettes (Phase 1.8).
+  useEffect(() => {
+    let cancelled = false
+    listRecipes()
+      .then((rs) => { if (!cancelled) setRecipes(rs || []) })
+      .catch(() => { /* recettes optionnelles, pas critiques */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const onRecipeChange = (id) => {
+    setRecipeId(id)
+    if (!id) {
+      setImageEngineFromRecipe(null)
+      return
+    }
+    const r = recipes.find((x) => String(x.id) === String(id))
+    if (r) {
+      setEngine(r.engine)
+      setImageEngineFromRecipe(r.image_engine || null)
+    }
+  }
 
   const costGen = costHints?.generation_eur ?? FALLBACK_COST_GEN
   const costExport = costHints?.export_eur ?? FALLBACK_COST_EXPORT
@@ -90,10 +115,13 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
       const usingText = text.trim().length > 0
       const payload = {
         engine,
+        image_engine: imageEngineFromRecipe || undefined,
         input_text: usingText ? text.trim() : null,
         input_image: usingText ? null : await fileToDataUrl(imageFile),
       }
       await onSubmit(payload)
+      // Increment usage counter — best-effort, ne bloque pas la soumission.
+      if (recipeId) incrementRecipeUsage(recipeId).catch(() => {})
     } catch (exc) {
       setError(exc.detail || exc.message || 'Erreur inconnue')
     }
@@ -101,6 +129,25 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
 
   return (
     <form className="input-form" onSubmit={handleSubmit}>
+      {recipes.length > 0 && (
+        <label className="input-form__field">
+          <span>Recette (optionnelle)</span>
+          <select
+            value={recipeId}
+            onChange={(e) => onRecipeChange(e.target.value)}
+            disabled={busy}
+          >
+            <option value="">— Aucune recette —</option>
+            {recipes.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name} {r.category ? `(${r.category})` : ''} · {r.engine}
+                {r.usage_count ? ` · ${r.usage_count}× utilisée` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       <label className="input-form__field">
         <span>Description (texte)</span>
         <textarea

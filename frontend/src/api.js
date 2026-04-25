@@ -103,6 +103,48 @@ export const remeshModel = (id, targetPolycount = 30000) =>
     body: { target_polycount: targetPolycount },
   })
 
+export const repairModel = (id, mode = 'auto') =>
+  request(`/api/models/${id}/repair`, {
+    method: 'POST',
+    body: { mode },
+  })
+
+export const suggestSmartRegen = (id) =>
+  request(`/api/models/${id}/regen-smart-suggest`, { method: 'POST' })
+
+// ---------------------------------------------------------------------- //
+// Recettes (Phase 1.8)
+// ---------------------------------------------------------------------- //
+
+export const listRecipes = () => request('/api/recipes')
+
+export const createRecipe = (payload) =>
+  request('/api/recipes', { method: 'POST', body: payload })
+
+export const updateRecipe = (id, patch) =>
+  request(`/api/recipes/${id}`, { method: 'PUT', body: patch })
+
+export const deleteRecipe = (id) =>
+  request(`/api/recipes/${id}`, { method: 'DELETE' })
+
+export const incrementRecipeUsage = (id) =>
+  request(`/api/recipes/${id}/use`, { method: 'POST' })
+
+// ---------------------------------------------------------------------- //
+// Batch (Phase 1.9)
+// ---------------------------------------------------------------------- //
+
+export const createBatch = (payload) =>
+  request('/api/batch', { method: 'POST', body: payload })
+
+export const listBatches = ({ signal } = {}) => request('/api/batch', { signal })
+
+export const getBatch = (id, { signal } = {}) =>
+  request(`/api/batch/${id}`, { signal })
+
+export const cancelBatch = (id) =>
+  request(`/api/batch/${id}/cancel`, { method: 'POST' })
+
 // ---------------------------------------------------------------------- //
 // Services
 // ---------------------------------------------------------------------- //
@@ -160,3 +202,27 @@ export const updatePrompt = (brickId, override) =>
 
 export const resetPrompt = (brickId) =>
   request(`/api/prompts/${brickId}`, { method: 'DELETE' })
+
+// ---------------------------------------------------------------------- //
+// Bibliothèque de prompts versionnée (Phase 1.5)
+// ---------------------------------------------------------------------- //
+
+export const listPromptLibrary = ({ brickId = null, category = null } = {}) => {
+  const qs = new URLSearchParams()
+  if (brickId) qs.set('brick_id', brickId)
+  if (category) qs.set('category', category)
+  const path = `/api/prompts/library${qs.toString() ? `?${qs}` : ''}`
+  return request(path)
+}
+
+export const createPrompt = (payload) =>
+  request('/api/prompts/library', { method: 'POST', body: payload })
+
+export const updatePromptInLibrary = (id, patch) =>
+  request(`/api/prompts/library/${id}`, { method: 'PUT', body: patch })
+
+export const deletePrompt = (id) =>
+  request(`/api/prompts/library/${id}`, { method: 'DELETE' })
+
+export const activatePrompt = (id) =>
+  request(`/api/prompts/library/${id}/activate`, { method: 'POST' })

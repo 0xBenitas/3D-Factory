@@ -23,11 +23,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import config
 from auth import basic_auth_middleware
 from database import init_db
+from routers import batch as batch_router
 from routers import credits as credits_router
 from routers import exports as exports_router
 from routers import models3d as models3d_router
 from routers import pipeline as pipeline_router
 from routers import prompts as prompts_router
+from routers import recipes as recipes_router
 from routers import services as services_router
 from routers import settings as settings_router
 from routers import stats as stats_router
@@ -91,6 +93,8 @@ app.include_router(settings_router.router)
 app.include_router(stats_router.router)
 app.include_router(credits_router.router)
 app.include_router(prompts_router.router)
+app.include_router(recipes_router.router)
+app.include_router(batch_router.router)
 
 
 # --------------------------------------------------------------------------- #

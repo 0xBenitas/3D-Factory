@@ -93,6 +93,34 @@ class MeshRepairTest(unittest.TestCase):
             result = mesh_repair.analyze_and_repair(str(glb), str(stl))
             self.assertIn("normals", result["repair_log"].lower() + " ")
 
+    def test_unknown_mode_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            glb = Path(td) / "c.glb"
+            stl = Path(td) / "c.stl"
+            self._write_cube_glb(glb, (0.1, 0.1, 0.1))
+            with self.assertRaises(ValueError):
+                mesh_repair.analyze_and_repair(str(glb), str(stl), mode="bogus")
+
+    def test_normalize_mode_only_normalizes(self) -> None:
+        """Mode 'normalize' n'applique que merge_vertices + fix_normals."""
+        with tempfile.TemporaryDirectory() as td:
+            glb = Path(td) / "c.glb"
+            stl = Path(td) / "c.stl"
+            self._write_cube_glb(glb, (0.1, 0.1, 0.1))
+            result = mesh_repair.analyze_and_repair(str(glb), str(stl), mode="normalize")
+            self.assertIn("normalized", result["repair_log"])
+            self.assertNotIn("fill_holes", result["repair_log"])
+            self.assertNotIn("pymeshfix", result["repair_log"])
+
+    def test_hard_mode_runs_pymeshfix(self) -> None:
+        """Mode 'hard' force pymeshfix même sur un cube watertight."""
+        with tempfile.TemporaryDirectory() as td:
+            glb = Path(td) / "c.glb"
+            stl = Path(td) / "c.stl"
+            self._write_cube_glb(glb, (0.1, 0.1, 0.1))
+            result = mesh_repair.analyze_and_repair(str(glb), str(stl), mode="hard")
+            self.assertIn("pymeshfix", result["repair_log"])
+
 
 if __name__ == "__main__":
     unittest.main()
