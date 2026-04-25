@@ -129,32 +129,29 @@ Tranché : preview-only par défaut, 2-stage en opt-in par génération. Voir bl
 
 ## Phase 2 — UX et différenciation
 
-### 2.10. Studio viewer modulable (R3F → Studio)
-`ModelViewer.jsx` utilise déjà R3F + drei. Reste la couche "Studio".
+### 2.10. Studio viewer modulable (R3F → Studio) ✅ (2026-04-25, scope v1)
+`ModelViewer.jsx` utilise R3F + drei + leva. Persistence presets reportée à 2.13.
 
-**Garde-fou G7** : si usage mobile prévu, choisir une UI custom plutôt que `leva` (panneau dev-tools).
+**Garde-fou G7 appliqué** : panneau leva masqué sur mobile via `@media (max-width: 768px) { #leva__root { display: none !important } }` (CSS index.css).
 
 - [x] Migration R3F + `drei`
-- [ ] Panneau contrôles (`leva` ou alternative custom)
-- [ ] Contrôles : lights (6 max, presets Studio 3-points / Softbox / Dramatic / Flat / Custom), HDRI (4-6 presets), matériau (Porcelaine mat / ABS / PLA / Métal brossé / Résine / Custom), fond (HDRI/couleur/dégradé/transparent), avancé (ombre portée, bloom, exposure, auto-rotate)
-- [ ] Toggle qualité global Éco / Normal / Max (ajuste shadow res, bloom, HDRI res)
-- [ ] Tone mapping ACES + sRGB output
-- [ ] Cache HDRI côté client + lazy-load
-- [ ] Table `viewer_presets` : `id, name, config_json, is_default`
-- [ ] Seeds : Figurine classique, Prototype technique, Showcase marketplace, Debug
-- [ ] UI : sauvegarder/charger preset, preset appliqué réutilisable sur n'importe quel modèle
+- [x] Panneau contrôles `leva` (collapsed par défaut, drag-friendly)
+- [x] Contrôles : lights (presets Studio 3-points / Softbox / Dramatic / Flat), HDRI (8 presets drei), matériau (Original / Porcelaine mat / PLA / ABS / Résine / Métal brossé), fond (HDRI on/off + couleur unie), avancé (ombre portée ContactShadows, exposure, auto-rotate)
+- [x] Tone mapping ACES + sRGB output
+- [ ] *Pas fait :* Toggle qualité global Éco/Normal/Max (pas critique pour MVP, à revoir si perf devient un problème)
+- [ ] *Pas fait :* Cache HDRI côté client + lazy-load (drei gère le caching, ok pour 8 presets)
+- [ ] *Décalé 2.13 :* Table `viewer_presets` + seeds + sauvegarde/chargement preset (recettes complètes étendront recipes avec `viewer_preset_id`)
 
-### 2.10b. Historique des actions modèle (timeline UX)
-Petit ajout UX : voir d'un coup d'œil ce qui a déjà été fait sur un modèle (repair, regen, remesh…) pour éviter les actions doublon et comprendre les variations de score.
-
-- [ ] Table `model_events` append-only : `id, model_id FK CASCADE, event_type, details_json (JSON nullable), created_at`
-- [ ] Event types : `created`, `optimized`, `generated`, `repaired` (mode + delta watertight), `scored` (score + delta vs précédent), `regenerated`, `remeshed`, `repair_only`
-- [ ] Hooks dans `tasks.py` aux moments clés (logger non-bloquant, try/except large pour ne jamais casser le pipeline)
-- [ ] Endpoint `GET /api/models/{id}/events` (read-only, ordre chronologique ASC)
-- [ ] UI : timeline verticale compacte dans le panneau modèle (icône par event_type + label court + timestamp relatif "il y a 3 min" via `Intl.RelativeTimeFormat`)
-- [ ] Pas de pagination (volume négligeable, < 20 events/modèle en pratique)
-- [ ] **Pas de backfill** des modèles existants — historique démarre au déploiement (la valeur est dans le travail futur, pas la rétrospective)
-- [ ] Test : 1 test endpoint (modèle avec 3 events → 200 + ordre correct)
+### 2.10b. Historique des actions modèle (timeline UX) ✅ (2026-04-25)
+- [x] Table `model_events` append-only : `id, model_id FK CASCADE, event_type, details_json (JSON nullable), created_at` (+ index `model_id`, `created_at`)
+- [x] Event types : `created`, `optimized`, `generated`, `repaired` (mode + before/after watertight + face_count), `scored` (score + previous_score + delta), `regenerated`, `remeshed`, `repair_only`
+- [x] Service `services/model_events.py` avec `log_event(model_id, type, details)` best-effort (try/except large, types invalides droppés en warning)
+- [x] Hooks dans `tasks.py` (optimized après optimizer, generated après FORGE et FORGE remesh, repaired et scored dans `_run_repair_and_score`) + dans routers (`pipeline.py` créé, `models3d.py` regenerated/remeshed/repair_only) + dans `tasks.run_batch` (created)
+- [x] Endpoint `GET /api/models/{id}/events` (read-only, ordre ASC chronologique, 404 si modèle inconnu, [] si modèle sans event)
+- [x] UI `ModelTimeline.jsx` : timeline verticale compacte dans le panneau modèle, icône par event_type + label court + timestamp relatif via `Intl.RelativeTimeFormat('fr')` + chip details (mode repair, score+delta, target polycount…). Refresh auto via `refreshKey={pipeline_status}-{qc_score}`.
+- [x] Pas de pagination (volume négligeable)
+- [x] **Pas de backfill** des modèles existants — historique démarre au déploiement
+- [x] Test `test_model_events.py` : 3/3 OK (ordre chronologique ASC, modèle vide → [], 404 modèle inconnu)
 
 ### 2.11. Banque d'images + image-to-3D ciblé
 Meshy `image-to-3d` est **déjà supporté**. Il manque la couche assets.
