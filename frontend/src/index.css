@@ -77,11 +77,21 @@ html, body, #root { margin: 0; padding: 0; min-height: 100vh; background: var(--
 .btn--primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
 .btn--success { background: var(--success); border-color: var(--success); color: #fff; }
 .btn--danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn--ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
+}
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
 .btn--active { background: rgba(79, 140, 255, 0.2); border-color: var(--accent); }
 .btn--chip { padding: 0.3rem 0.7rem; font-size: 0.85rem; }
 
 /* ---- Form controls ---- */
-textarea, input[type="text"], input[type="range"], select {
+textarea, input[type="text"], input[type="number"], input[type="search"], input[type="range"], select {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
@@ -145,10 +155,6 @@ label > span { color: var(--text-muted); font-size: 0.85rem; }
   background: var(--surface-hi); border-radius: 6px;
   font-variant-numeric: tabular-nums;
 }
-.btn--danger {
-  background: rgba(255, 92, 92, 0.14); color: var(--bad); border: 1px solid rgba(255, 92, 92, 0.4);
-}
-.btn--danger:hover:not(:disabled) { background: rgba(255, 92, 92, 0.24); }
 
 /* ---- CreditsBar ---- */
 .credits-bar {

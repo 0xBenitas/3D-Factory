@@ -1,8 +1,10 @@
-"""Tests du parser JSON tolérant de seo_gen (pas d'appel Claude réel).
+"""Tests des helpers de parsing JSON / troncature partagés entre seo_gen,
+prompt_optimizer et quality_scorer (extraits dans `anthropic_helpers`).
 
-Requiert `anthropic` installé (import top-level dans services.seo_gen).
-Si la lib manque, les tests sont skippés : on ne casse pas un test suite
-minimal en environnement sans deps Claude.
++ contrat des `DEFAULT_PRINT_PARAMS` (frontend en dépend).
+
+Requiert `anthropic` installé (import top-level dans `anthropic_helpers`).
+Si la lib manque, les tests sont skippés.
 """
 
 from __future__ import annotations
@@ -15,47 +17,60 @@ _THIS = Path(__file__).resolve()
 sys.path.insert(0, str(_THIS.parent.parent))
 
 try:
-    from services import seo_gen  # noqa: E402
-    _SEO_GEN_AVAILABLE = True
+    from services import anthropic_helpers, seo_gen  # noqa: E402
+    _AVAILABLE = True
 except ImportError:
+    anthropic_helpers = None  # type: ignore[assignment]
     seo_gen = None  # type: ignore[assignment]
-    _SEO_GEN_AVAILABLE = False
+    _AVAILABLE = False
 
 
-@unittest.skipUnless(_SEO_GEN_AVAILABLE, "anthropic/seo_gen not installed")
-class SeoGenParseTest(unittest.TestCase):
+@unittest.skipUnless(_AVAILABLE, "anthropic SDK not installed")
+class ParseJsonTolerantTest(unittest.TestCase):
     def test_parse_plain_json(self) -> None:
         raw = '{"title": "Foo", "price_eur": 2.49}'
-        self.assertEqual(seo_gen._parse_json(raw),
-                         {"title": "Foo", "price_eur": 2.49})
+        self.assertEqual(
+            anthropic_helpers.parse_json_tolerant(raw),
+            {"title": "Foo", "price_eur": 2.49},
+        )
 
     def test_parse_fenced_json(self) -> None:
         raw = "```json\n{\"a\": 1}\n```"
-        self.assertEqual(seo_gen._parse_json(raw), {"a": 1})
+        self.assertEqual(anthropic_helpers.parse_json_tolerant(raw), {"a": 1})
 
     def test_parse_fenced_without_lang(self) -> None:
         raw = "```\n{\"a\": 1}\n```"
-        self.assertEqual(seo_gen._parse_json(raw), {"a": 1})
+        self.assertEqual(anthropic_helpers.parse_json_tolerant(raw), {"a": 1})
 
     def test_parse_with_prefix_text(self) -> None:
         raw = 'Voici la réponse:\n{"x": "y"}\nFin.'
-        # Le parser cherche le premier { ... }.
-        self.assertEqual(seo_gen._parse_json(raw), {"x": "y"})
+        self.assertEqual(anthropic_helpers.parse_json_tolerant(raw), {"x": "y"})
 
     def test_parse_invalid_returns_none(self) -> None:
-        self.assertIsNone(seo_gen._parse_json(""))
-        self.assertIsNone(seo_gen._parse_json("not json at all"))
-        self.assertIsNone(seo_gen._parse_json("{ invalid json "))
+        self.assertIsNone(anthropic_helpers.parse_json_tolerant(""))
+        self.assertIsNone(anthropic_helpers.parse_json_tolerant("not json at all"))
+        self.assertIsNone(anthropic_helpers.parse_json_tolerant("{ invalid json "))
 
-    def test_truncate_respects_max(self) -> None:
+
+@unittest.skipUnless(_AVAILABLE, "anthropic SDK not installed")
+class TruncateSmartTest(unittest.TestCase):
+    def test_respects_max(self) -> None:
         text = "a" * 300
-        out = seo_gen._truncate(text, 100)
-        self.assertLessEqual(len(out), 100)
+        self.assertLessEqual(len(anthropic_helpers.truncate_smart(text, 100)), 100)
 
-    def test_truncate_keeps_short_text(self) -> None:
-        self.assertEqual(seo_gen._truncate("short", 100), "short")
+    def test_keeps_short_text(self) -> None:
+        self.assertEqual(anthropic_helpers.truncate_smart("short", 100), "short")
 
-    def test_default_print_params_has_all_keys(self) -> None:
+    def test_breaks_on_word_boundary_when_close(self) -> None:
+        text = "the quick brown fox jumps over"
+        out = anthropic_helpers.truncate_smart(text, 15)
+        # cut à 15 = "the quick brown" — pas de break en plein mot
+        self.assertFalse(out.endswith("brow") or out.endswith("brow "))
+
+
+@unittest.skipUnless(_AVAILABLE, "anthropic SDK not installed")
+class DefaultPrintParamsTest(unittest.TestCase):
+    def test_has_all_keys(self) -> None:
         # Sert de "contrat" pour le frontend PrintParams.
         expected_keys = {
             "layer_height_mm", "infill_percent", "supports_needed",
