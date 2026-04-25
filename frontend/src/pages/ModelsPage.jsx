@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import usePolling from '../hooks/usePolling.js'
 import ErrorBoundary from '../components/ErrorBoundary.jsx'
 import ExportPanel from '../components/ExportPanel.jsx'
 import ModelActions from '../components/ModelActions.jsx'
@@ -121,14 +122,11 @@ export default function ModelsPage() {
     [models, detail],
   )
 
-  useEffect(() => {
-    if (!anyRunning) return
-    const t = setInterval(() => {
-      reloadList()
-      reloadDetail()
-    }, 3000)
-    return () => clearInterval(t)
-  }, [anyRunning, reloadList, reloadDetail])
+  const pollBoth = useCallback(() => {
+    reloadList()
+    reloadDetail()
+  }, [reloadList, reloadDetail])
+  usePolling(pollBoth, 3000, { enabled: anyRunning })
 
   const handleActionDone = async () => {
     // Appelé après approve/regen/remesh/reject.

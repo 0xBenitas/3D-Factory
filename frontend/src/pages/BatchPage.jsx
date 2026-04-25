@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import usePolling from '../hooks/usePolling.js'
 import { useToast } from '../components/Toast.jsx'
 import {
   cancelBatch,
@@ -35,43 +36,29 @@ export default function BatchPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Polling de la liste des batches (3s)
-  useEffect(() => {
-    let cancelled = false
-    let timer = null
-    const fetchAll = async () => {
-      try {
-        const data = await listBatches()
-        if (!cancelled) setBatches(data || [])
-      } catch (exc) {
-        if (!cancelled) toast(exc.detail || exc.message, { type: 'error' })
-      }
+  const fetchAll = useCallback(async () => {
+    try {
+      setBatches((await listBatches()) || [])
+    } catch (exc) {
+      toast(exc.detail || exc.message, { type: 'error' })
     }
-    fetchAll()
-    timer = setInterval(fetchAll, 3000)
-    return () => { cancelled = true; clearInterval(timer) }
   }, [toast])
+  useEffect(() => { fetchAll() }, [fetchAll])
+  usePolling(fetchAll, 3000)
 
-  // Polling du détail du batch sélectionné (3s)
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null)
-      return
+  const fetchDetail = useCallback(async () => {
+    if (!selectedId) return
+    try {
+      setDetail(await getBatch(selectedId))
+    } catch (exc) {
+      toast(exc.detail || exc.message, { type: 'error' })
     }
-    let cancelled = false
-    let timer = null
-    const fetchDetail = async () => {
-      try {
-        const d = await getBatch(selectedId)
-        if (!cancelled) setDetail(d)
-      } catch (exc) {
-        if (!cancelled) toast(exc.detail || exc.message, { type: 'error' })
-      }
-    }
-    fetchDetail()
-    timer = setInterval(fetchDetail, 3000)
-    return () => { cancelled = true; clearInterval(timer) }
   }, [selectedId, toast])
+  useEffect(() => {
+    if (!selectedId) { setDetail(null); return }
+    fetchDetail()
+  }, [selectedId, fetchDetail])
+  usePolling(fetchDetail, 3000, { enabled: !!selectedId })
 
   const submit = async (e) => {
     e.preventDefault()
@@ -109,6 +96,8 @@ export default function BatchPage() {
       <h2>Batch</h2>
       <p className="muted">
         Lance N générations en série avec une recette commune. Coûts plafonnés par budget.
+        Chaque item crée un modèle individuel — suivez la progression ici, et retrouvez les
+        modèles générés dans <Link to="/models">Models</Link> au fur et à mesure.
       </p>
 
       <form onSubmit={submit} className="batch-form">

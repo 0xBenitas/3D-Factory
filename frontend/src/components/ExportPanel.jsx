@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import usePolling from '../hooks/usePolling.js'
 import PrintParams from './PrintParams.jsx'
 import { useToast } from './Toast.jsx'
 import {
@@ -104,11 +105,9 @@ export default function ExportPanel({ model, onChanged }) {
   }, [reloadExports])
 
   // Auto-refresh pendant que le pipeline export tourne.
-  useEffect(() => {
-    if (!RUNNING_STATUSES.has(model.pipeline_status)) return
-    const t = setInterval(reloadExports, 3000)
-    return () => clearInterval(t)
-  }, [model.pipeline_status, reloadExports])
+  usePolling(reloadExports, 3000, {
+    enabled: RUNNING_STATUSES.has(model.pipeline_status),
+  })
 
   const latest = exports_[0] || null
   const pipelineBusy = RUNNING_STATUSES.has(model.pipeline_status)

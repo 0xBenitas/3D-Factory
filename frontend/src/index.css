@@ -135,6 +135,16 @@ label > span { color: var(--text-muted); font-size: 0.85rem; }
   font-size: 0.85rem;
   padding: 0.2rem 0;
 }
+.input-form__recipe-applied {
+  margin-top: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  background: rgba(79, 140, 255, 0.10);
+  border: 1px solid rgba(79, 140, 255, 0.25);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  align-self: flex-start;
+}
 .engine-selector { flex: 1; min-width: 200px; }
 
 /* ---- PipelineTracker ---- */

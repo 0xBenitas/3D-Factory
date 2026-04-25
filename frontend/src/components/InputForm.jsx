@@ -145,6 +145,12 @@ export default function InputForm({ onSubmit, busy = false, disabledReason = nul
               </option>
             ))}
           </select>
+          {recipeId && (
+            <small className="input-form__recipe-applied">
+              Appliquée : moteur <strong>{engine}</strong>
+              {imageEngineFromRecipe && <> · img <strong>{imageEngineFromRecipe}</strong></>}
+            </small>
+          )}
         </label>
       )}
 

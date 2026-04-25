@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useRef } from 'react'
+import { Suspense, useEffect, useMemo, useRef } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import {
   Bounds,
@@ -52,6 +52,10 @@ function GLBModel({ url, materialOverride }) {
     })
     return scene
   }, [scene, materialOverride])
+  // Cache GLTF de drei : libère l'entrée quand on quitte ce modèle pour
+  // que le prochain affichage de la même URL refetche (utile après un
+  // regenerate qui réécrit le .glb sous la même URL).
+  useEffect(() => () => useGLTF.clear(url), [url])
   return <primitive object={cloned} />
 }
 
@@ -148,13 +152,12 @@ export default function ModelViewer({ glbUrl, height = 400 }) {
         dpr={[1, 2]}
         gl={{ toneMapping: ACESFilmicToneMapping, outputColorSpace: SRGBColorSpace }}
         onCreated={({ gl }) => { gl.toneMappingExposure = exposure }}
-        key={glbUrl}
       >
         <color attach="background" args={[bgColor]} />
         <StudioLights preset={lights} />
         <Suspense fallback={null}>
           <Bounds fit clip observe margin={1.2}>
-            <Center>
+            <Center key={glbUrl}>
               <GLBModel url={glbUrl} materialOverride={materialOverride} />
             </Center>
             <RegisterBoundsHandle handleRef={resetRef} />
