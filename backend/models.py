@@ -143,7 +143,12 @@ class GenerationPrompt(Base):
         index=True,
     )
     brick_id = Column(String, nullable=False)
-    prompt_id = Column(Integer, ForeignKey("prompts.id"), nullable=False, index=True)
+    prompt_id = Column(
+        Integer,
+        ForeignKey("prompts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
 

@@ -88,6 +88,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_partial_indexes()
+    _ensure_generation_prompts_cascade()
     _seed_default_settings()
     _seed_prompt_library_and_migrate_overrides()
     logger.info("Database initialized at %s", DB_PATH)
@@ -103,6 +104,54 @@ def _ensure_partial_indexes() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_prompts_active_per_brick "
             "ON prompts(brick_id) WHERE is_active = 1"
         )
+        conn.commit()
+
+
+def _ensure_generation_prompts_cascade() -> None:
+    """Migre `generation_prompts.prompt_id` FK pour avoir ON DELETE CASCADE.
+
+    SQLAlchemy `create_all` ne modifie pas les FK des tables existantes, et
+    SQLite n'a pas d'ALTER pour FK. Donc si la table a été créée avant le
+    fix, elle a une FK sans CASCADE → on recrée proprement (rename + copy
+    + drop). Idempotent : si la FK est déjà CASCADE, no-op.
+    """
+    with engine.connect() as conn:
+        row = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='generation_prompts'"
+        ).fetchone()
+        if row is None:
+            return  # première création — create_all s'en occupe
+        sql = (row[0] or "").lower()
+        # Cherche "references prompts" suivi (proche) de "on delete cascade".
+        # Si déjà présent → rien à faire.
+        if "references prompts" in sql and "on delete cascade" in sql.split("references prompts", 1)[1][:80]:
+            return
+        logger.info("Migrating generation_prompts FK → ON DELETE CASCADE")
+        conn.exec_driver_sql("ALTER TABLE generation_prompts RENAME TO generation_prompts_old")
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE generation_prompts (
+                model_id INTEGER NOT NULL,
+                brick_id VARCHAR NOT NULL,
+                prompt_id INTEGER NOT NULL,
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY (model_id, brick_id),
+                FOREIGN KEY(model_id) REFERENCES models (id) ON DELETE CASCADE,
+                FOREIGN KEY(prompt_id) REFERENCES prompts (id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO generation_prompts (model_id, brick_id, prompt_id, created_at) "
+            "SELECT model_id, brick_id, prompt_id, created_at FROM generation_prompts_old"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_generation_prompts_model_id ON generation_prompts(model_id)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_generation_prompts_prompt_id ON generation_prompts(prompt_id)"
+        )
+        conn.exec_driver_sql("DROP TABLE generation_prompts_old")
         conn.commit()
 
 

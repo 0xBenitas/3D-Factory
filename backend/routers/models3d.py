@@ -116,8 +116,26 @@ class ActionResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Helpers de sérialisation
+# Helpers
 # --------------------------------------------------------------------------- #
+
+def _reset_pipeline_output(m: Model, next_status: str, *, reset_validation: bool) -> None:
+    """Reset les champs de sortie du pipeline avant une relance.
+
+    `reset_validation=False` pour `repair-only` : on rejoue juste le mesh
+    sur le glb existant, l'approbation manuelle déjà donnée n'a pas à être
+    invalidée.
+    """
+    m.pipeline_status = next_status
+    m.pipeline_error = None
+    m.qc_score = None
+    m.qc_details = None
+    m.mesh_metrics = None
+    m.repair_log = None
+    if reset_validation:
+        m.validation = "pending"
+        m.rejection_reason = None
+
 
 def _to_summary(m: Model) -> ModelSummary:
     return ModelSummary(
@@ -341,16 +359,9 @@ def regenerate_model(
 
     check_budget_or_raise(db)
 
-    # Reset les champs du pipeline — garde l'input + engine + optimized_prompt
-    # précédent (utile si prompt_override est null, on pourra ré-optimiser).
-    m.pipeline_status = "prompt"
-    m.pipeline_error = None
-    m.validation = "pending"
-    m.rejection_reason = None
-    m.qc_score = None
-    m.qc_details = None
-    m.mesh_metrics = None
-    m.repair_log = None
+    # On garde input + engine + optimized_prompt (utile si prompt_override
+    # est null, on pourra ré-optimiser).
+    _reset_pipeline_output(m, "prompt", reset_validation=True)
     db.commit()
 
     model_events.log_event(model_id, "regenerated", {
@@ -388,14 +399,7 @@ def remesh_model(
 
     check_budget_or_raise(db)
 
-    m.pipeline_status = "generating"
-    m.pipeline_error = None
-    m.validation = "pending"
-    m.rejection_reason = None
-    m.qc_score = None
-    m.qc_details = None
-    m.mesh_metrics = None
-    m.repair_log = None
+    _reset_pipeline_output(m, "generating", reset_validation=True)
     db.commit()
 
     model_events.log_event(model_id, "remeshed", {
@@ -436,12 +440,9 @@ def repair_model(
 
     # Pas de check_budget ici : aucun appel API externe.
 
-    m.pipeline_status = "repairing"
-    m.pipeline_error = None
-    m.qc_score = None
-    m.qc_details = None
-    m.mesh_metrics = None
-    m.repair_log = None
+    # `reset_validation=False` : repair sur le glb existant ne change pas
+    # l'approbation déjà donnée par l'utilisateur.
+    _reset_pipeline_output(m, "repairing", reset_validation=False)
     db.commit()
 
     model_events.log_event(model_id, "repair_only", {"mode": payload.mode})
