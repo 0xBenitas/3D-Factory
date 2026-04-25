@@ -199,6 +199,30 @@ class BatchJob(Base):
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class ModelEvent(Base):
+    """Timeline d'événements append-only sur un Model (Phase 2.10b).
+
+    Une ligne par étape pipeline ou action utilisateur (created, optimized,
+    generated, repaired, scored, regenerated, remeshed, repair_only).
+    Sert à afficher un historique compact dans l'UI panneau modèle.
+
+    Pas de backfill : l'historique commence au déploiement de la feature.
+    """
+
+    __tablename__ = "model_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model_id = Column(
+        Integer,
+        ForeignKey("models.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = Column(String, nullable=False)
+    details_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
+
+
 class BatchItem(Base):
     """Item d'un BatchJob — 1 ligne = 1 modèle à générer.
 

@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 from app_settings import check_budget_or_raise
 from config import resolve_under_data_dir
 from database import get_db
-from models import Model
+from models import Model, ModelEvent
+from services import model_events
 from services import regen_smart as regen_smart_service
 from tasks import run_pipeline_guarded, run_remesh_guarded, run_repair_only_guarded
 
@@ -100,6 +101,13 @@ class RegenSmartSuggestion(BaseModel):
     rationale: str
     category: str | None
     qc_score: float | None
+
+
+class ModelEventOut(BaseModel):
+    id: int
+    event_type: str
+    details: dict[str, Any] | None
+    created_at: str
 
 
 class ActionResponse(BaseModel):
@@ -345,6 +353,9 @@ def regenerate_model(
     m.repair_log = None
     db.commit()
 
+    model_events.log_event(model_id, "regenerated", {
+        "has_prompt_override": bool(payload.prompt_override),
+    })
     background_tasks.add_task(
         run_pipeline_guarded, model_id, payload.prompt_override
     )
@@ -387,6 +398,9 @@ def remesh_model(
     m.repair_log = None
     db.commit()
 
+    model_events.log_event(model_id, "remeshed", {
+        "target_polycount": payload.target_polycount,
+    })
     background_tasks.add_task(
         run_remesh_guarded, model_id, payload.target_polycount
     )
@@ -430,6 +444,7 @@ def repair_model(
     m.repair_log = None
     db.commit()
 
+    model_events.log_event(model_id, "repair_only", {"mode": payload.mode})
     background_tasks.add_task(run_repair_only_guarded, model_id, payload.mode)
     logger.info("Model #%d repair scheduled (mode=%s)", model_id, payload.mode)
     return ActionResponse(model_id=model_id)
@@ -473,3 +488,34 @@ async def suggest_smart_regen(
         category=m.category,
         qc_score=m.qc_score,
     )
+
+
+# --------------------------------------------------------------------------- #
+# GET /api/models/{id}/events — timeline append-only (Phase 2.10b)
+# --------------------------------------------------------------------------- #
+
+@router.get("/{model_id}/events", response_model=list[ModelEventOut])
+def list_model_events(model_id: int, db: Session = Depends(get_db)) -> list[ModelEventOut]:
+    """Timeline chronologique (ASC) des événements liés à ce modèle.
+
+    Pas de pagination : volume négligeable (< 20 events/modèle en pratique).
+    Renvoie [] si le modèle existe mais n'a aucun event (modèles antérieurs
+    au déploiement de 2.10b — pas de backfill volontaire).
+    """
+    if db.get(Model, model_id) is None:
+        raise HTTPException(404, f"Model {model_id} not found")
+    rows = (
+        db.query(ModelEvent)
+        .filter(ModelEvent.model_id == model_id)
+        .order_by(asc(ModelEvent.created_at), asc(ModelEvent.id))
+        .all()
+    )
+    return [
+        ModelEventOut(
+            id=r.id,
+            event_type=r.event_type,
+            details=r.details_json,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in rows
+    ]

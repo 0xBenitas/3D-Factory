@@ -44,7 +44,15 @@ from image_engines.base import (
     RETRYABLE as IMAGE_RETRYABLE,
 )
 from models import BatchItem, BatchJob, Export, Model, Recipe
-from services import mesh_repair, packager, prompt_optimizer, quality_scorer, screenshot, seo_gen
+from services import (
+    mesh_repair,
+    model_events,
+    packager,
+    prompt_optimizer,
+    quality_scorer,
+    screenshot,
+    seo_gen,
+)
 from templates import get_template
 
 logger = logging.getLogger(__name__)
@@ -265,6 +273,10 @@ async def _run_pipeline_inner(
         # Traçabilité (Phase 1.5) : enregistre quel preset a servi.
         brick_used = "prompt_optimizer_image" if (input_type == "image" and input_image_path) else "prompt_optimizer_text"
         app_settings.track_prompt_use(model_id, brick_used)
+        model_events.log_event(model_id, "optimized", {
+            "category": detected_category,
+            "length": len(optimized),
+        })
     _update_model(model_id, optimized_prompt=optimized, category=detected_category)
 
     # Vérif annulation avant de démarrer une étape coûteuse.
@@ -310,6 +322,11 @@ async def _run_pipeline_inner(
     _add_eur_cost(model_id, costs.engine_generate_eur(engine_name))
     logger.info("Pipeline #%d: .glb generated in %.1fs",
                 model_id, gen_result.generation_time_s)
+    model_events.log_event(model_id, "generated", {
+        "engine": engine_name,
+        "duration_s": round(gen_result.generation_time_s, 1),
+        "credits": gen_result.cost_credits,
+    })
 
     # ----- Étapes 3 + 4 : REPAIR + SCORE -----------------------------------
     await _run_repair_and_score(model_id, gen_result.glb_path, model_dir,
@@ -378,6 +395,13 @@ async def _run_remesh_inner(model_id: int, target_polycount: int) -> None:
         extra_credits=gen_result.cost_credits,
     )
     _add_eur_cost(model_id, costs.engine_remesh_eur(engine_name))
+    model_events.log_event(model_id, "generated", {
+        "engine": engine_name,
+        "duration_s": round(gen_result.generation_time_s, 1),
+        "credits": gen_result.cost_credits,
+        "remesh": True,
+        "target_polycount": target_polycount,
+    })
 
     await _run_repair_and_score(model_id, gen_result.glb_path, model_dir,
                                 object_desc=input_text or "(remeshed)")
@@ -412,12 +436,24 @@ async def _run_repair_and_score(
     # si pymeshfix/trimesh enchaînent des warnings — on cappe pour garder
     # la table légère.
     repair_log_raw = repair_result["repair_log"] or ""
+    new_metrics = repair_result["mesh_metrics"] or {}
+    # Lit l'ancien snapshot pour exposer un delta watertight dans la timeline.
+    with SessionLocal() as db:
+        m = db.get(Model, model_id)
+        prev_metrics = (m.mesh_metrics or {}) if m else {}
     _update_model(
         model_id,
         stl_path=repair_result["stl_path"],
-        mesh_metrics=repair_result["mesh_metrics"],
+        mesh_metrics=new_metrics,
         repair_log=repair_log_raw[:2000],
     )
+    model_events.log_event(model_id, "repaired", {
+        "mode": repair_mode,
+        "is_watertight": new_metrics.get("is_watertight"),
+        "was_watertight": prev_metrics.get("is_watertight"),
+        "face_count": new_metrics.get("face_count"),
+        "non_manifold_edges": new_metrics.get("non_manifold_edges"),
+    })
 
     # Thumbnail (~500ms CPU) — non-bloquant : si pyrender plante on
     # continue, la grille affiche juste le placeholder. Chemin
@@ -434,6 +470,7 @@ async def _run_repair_and_score(
     with SessionLocal() as db:
         m = db.get(Model, model_id)
         category = m.category if m else None
+        previous_score = m.qc_score if m else None
     try:
         score_result = await quality_scorer.score_mesh(
             repair_result["mesh_metrics"], object_desc, category=category,
@@ -456,6 +493,15 @@ async def _run_repair_and_score(
         # tous les presets utilisés dans cette génération.
         app_settings.track_prompt_use(model_id, "quality_scorer")
         app_settings.update_prompt_avg_score_for_model(model_id, score_result.score)
+        delta = (
+            round(score_result.score - previous_score, 2)
+            if previous_score is not None else None
+        )
+        model_events.log_event(model_id, "scored", {
+            "score": round(score_result.score, 2),
+            "previous_score": round(previous_score, 2) if previous_score is not None else None,
+            "delta": delta,
+        })
 
     _update_model(model_id, pipeline_status="pending")
     logger.info("Pipeline #%d DONE (status=pending, score=%s)",
@@ -843,6 +889,11 @@ async def run_batch(batch_id: int) -> None:
             item.started_at = datetime.now(timezone.utc)
             db.commit()
             model_id = model.id
+        model_events.log_event(model_id, "created", {
+            "source": "batch",
+            "batch_id": batch_id,
+            "engine": engine_name,
+        })
 
         # Lance le pipeline et attend la fin (sériel). `run_pipeline_guarded`
         # awaits `run_pipeline` qui termine quand le modèle est en pending/failed.

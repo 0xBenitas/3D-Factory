@@ -112,6 +112,9 @@ export const repairModel = (id, mode = 'auto') =>
 export const suggestSmartRegen = (id) =>
   request(`/api/models/${id}/regen-smart-suggest`, { method: 'POST' })
 
+export const listModelEvents = (id, { signal } = {}) =>
+  request(`/api/models/${id}/events`, { signal })
+
 // ---------------------------------------------------------------------- //
 // Recettes (Phase 1.8)
 // ---------------------------------------------------------------------- //

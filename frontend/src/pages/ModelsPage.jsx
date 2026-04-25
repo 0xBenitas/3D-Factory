@@ -3,6 +3,7 @@ import ErrorBoundary from '../components/ErrorBoundary.jsx'
 import ExportPanel from '../components/ExportPanel.jsx'
 import ModelActions from '../components/ModelActions.jsx'
 import ModelCard from '../components/ModelCard.jsx'
+import ModelTimeline from '../components/ModelTimeline.jsx'
 import ModelViewer from '../components/ModelViewer.jsx'
 import ScoreCard from '../components/ScoreCard.jsx'
 import { getGlbUrl, getInputImageUrl, getModel, listModels } from '../api.js'
@@ -374,6 +375,11 @@ export default function ModelsPage() {
                   category={detail.category}
                 />
               )}
+
+              <ModelTimeline
+                modelId={detail.id}
+                refreshKey={`${detail.pipeline_status}-${detail.qc_score ?? 'x'}`}
+              />
 
               <ModelActions model={detail} onChanged={handleActionDone} />
 

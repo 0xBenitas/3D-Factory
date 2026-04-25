@@ -22,6 +22,7 @@ from app_settings import check_budget_or_raise, get_setting
 from database import get_db
 from engines import get_engine
 from models import Model
+from services import model_events
 from tasks import run_pipeline_guarded
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,12 @@ async def run(
 
     logger.info("Pipeline scheduled: model_id=%d, engine=%s, input=%s",
                 model.id, engine_name, input_type)
+
+    model_events.log_event(model.id, "created", {
+        "source": "pipeline",
+        "input_type": input_type,
+        "engine": engine_name,
+    })
 
     # Schedule la BackgroundTask — FastAPI await la coroutine après response
     background_tasks.add_task(run_pipeline_guarded, model.id)
